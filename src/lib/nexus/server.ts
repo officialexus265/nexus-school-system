@@ -1960,27 +1960,58 @@ export const bootstrapPlatformOwner = createServerFn({ method: "POST" })
   .validator((data: { email?: string }) => data)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+
+    // Ensure column exists (migration may not have run yet on fresh PGLite)
+    try {
+      await sql.query(
+        `alter table "user" add column if not exists is_platform_owner boolean not null default false`,
+      );
+    } catch {
+      /* already exists or unsupported */
+    }
+
     const any = await sql<{ c: number }>`
       select count(*)::int as c from "user" where is_platform_owner = true
     `;
     if ((any[0]?.c ?? 0) > 0) {
+      // If current user is already owner, succeed; otherwise block
+      const me = await sql<{ is_platform_owner: boolean }>`
+        select is_platform_owner from "user" where id = ${context.userId} limit 1
+      `;
+      if (me[0]?.is_platform_owner) return { ok: true, already: true };
       throw new Error(
-        "A platform owner already exists. Sign in with that account, or ask them to grant access.",
+        "A platform owner already exists. Sign in with that account.",
       );
     }
+
+    // Promote the signed-in user by id (most reliable after sign-up)
+    await sql.query(
+      `update "user" set is_platform_owner = true where id = $1`,
+      [context.userId],
+    );
+
     const email = (data.email || "").trim().toLowerCase();
     if (email) {
       await sql.query(
         `update "user" set is_platform_owner = true where lower(email) = $1`,
         [email],
       );
-    } else {
-      await sql.query(
-        `update "user" set is_platform_owner = true where id = $1`,
-        [context.userId],
+    }
+
+    const check = await sql<{ id: string; email: string; is_platform_owner: boolean }>`
+      select id, email, is_platform_owner from "user" where id = ${context.userId} limit 1
+    `;
+    if (!check[0]?.is_platform_owner) {
+      throw new Error(
+        "Could not promote this account to platform owner. Try Sign in, then open /app/platform and use Claim super admin.",
       );
     }
-    return { ok: true };
+
+    return {
+      ok: true,
+      userId: check[0].id,
+      email: check[0].email,
+    };
   });
 
 export const setPlatformOwner = createServerFn({ method: "POST" })
@@ -4825,4 +4856,106 @@ export const wipeAllSchools = createServerFn({ method: "POST" })
     try { await sql.query(`delete from platform_invoice_events`); } catch { /* */ }
     try { await sql.query(`delete from background_jobs`); } catch { /* */ }
     return { ok: true, deleted: schools.length };
+  });
+
+
+
+
+/** Delete a user by email so the address can be re-registered. */
+export const deleteUserAccount = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { email: string; confirm: string }) => data)
+  .handler(async ({ context, data }) => {
+    if (data.confirm !== "DELETE") {
+      throw new Error('Type confirm as DELETE');
+    }
+    const sql = await getSql();
+    const email = data.email.trim().toLowerCase();
+    const platform = await isPlatformOwner(context.userId).catch(() => false);
+    const anyOwners = await sql<{ c: number }>`
+      select count(*)::int as c from "user" where is_platform_owner = true
+    `;
+    // Allow if platform owner, OR if there is no platform owner yet (recovery)
+    if (!platform && (anyOwners[0]?.c ?? 0) > 0) {
+      throw new Error("Only a platform owner can delete accounts");
+    }
+    const users = await sql<{ id: string }>`
+      select id from "user" where lower(email) = ${email}
+    `;
+    if (!users[0]) throw new Error("User not found");
+    const uid = users[0].id;
+    // Better Auth tables (column names vary slightly by version)
+    for (const q of [
+      `delete from session where "userId" = $1`,
+      `delete from session where user_id = $1`,
+      `delete from account where "userId" = $1`,
+      `delete from account where user_id = $1`,
+      `delete from verification where value = $1`,
+    ]) {
+      try {
+        await sql.query(q, [uid]);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      await sql.query(`delete from verification where identifier = $1`, [email]);
+    } catch {
+      /* ignore */
+    }
+    await sql.query(`delete from "user" where id = $1`, [uid]);
+    return { ok: true, deletedId: uid };
+  });
+
+
+/** Public-ish status for login UI (auth optional). */
+export const platformBootstrapStatus = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const sql = await getSql();
+    try {
+      await sql.query(
+        `alter table "user" add column if not exists is_platform_owner boolean not null default false`,
+      );
+    } catch {
+      /* */
+    }
+    const users = await sql<{ c: number }>`select count(*)::int as c from "user"`;
+    const owners = await sql<{ c: number }>`
+      select count(*)::int as c from "user" where is_platform_owner = true
+    `;
+    return {
+      userCount: users[0]?.c ?? 0,
+      platformOwnerCount: owners[0]?.c ?? 0,
+      canCreateFirstOwner: (owners[0]?.c ?? 0) === 0,
+    };
+  },
+);
+
+/** Promote a specific email to the only platform owner (ops / Neon recovery). */
+export const forcePlatformOwnerByEmail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { email: string; secret?: string }) => data)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const email = data.email.trim().toLowerCase();
+    const opsSecret = process.env.PLATFORM_OPS_SECRET?.trim();
+    const platform = await isPlatformOwner(context.userId).catch(() => false);
+    const secretOk = opsSecret && data.secret && data.secret === opsSecret;
+    const anyOwners = await sql<{ c: number }>`
+      select count(*)::int as c from "user" where is_platform_owner = true
+    `;
+    if (!platform && !secretOk && (anyOwners[0]?.c ?? 0) > 0) {
+      throw new Error("Not allowed");
+    }
+    // Demote everyone, promote this email
+    await sql.query(`update "user" set is_platform_owner = false`);
+    const r = await sql.query(
+      `update "user" set is_platform_owner = true where lower(email) = $1`,
+      [email],
+    );
+    const check = await sql<{ id: string; email: string }>`
+      select id, email from "user" where lower(email) = ${email} and is_platform_owner = true
+    `;
+    if (!check[0]) throw new Error(`No user with email ${email}`);
+    return { ok: true, userId: check[0].id, email: check[0].email };
   });

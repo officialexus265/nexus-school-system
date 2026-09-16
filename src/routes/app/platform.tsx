@@ -13,6 +13,7 @@ import {
   deleteSchool,
   transitionSchoolStatus,
   wipeAllSchools,
+  bootstrapPlatformOwner,
 } from "@/lib/nexus/server";
 import { money } from "@/lib/utils";
 
@@ -35,6 +36,8 @@ function PlatformPage() {
 
   const schools = q.data.schools;
   const active = schools.filter((s) => s.status === "ACTIVE").length;
+  const isPlatform = q.data.isPlatformOwner;
+
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -99,6 +102,31 @@ function PlatformPage() {
           </div>
         }
       />
+
+      {!isPlatform && (
+        <section className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+          <p className="text-sm font-medium">This account is not platform owner yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            If you just registered, click below to claim super admin (only works when no platform
+            owner exists).
+          </p>
+          <Button
+            className="mt-3"
+            onClick={async () => {
+              try {
+                await bootstrapPlatformOwner({ data: {} });
+                toast.success("You are now the platform super admin");
+                await invalidate();
+                window.location.href = "/app/platform";
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed");
+              }
+            }}
+          >
+            Claim super admin
+          </Button>
+        </section>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <StatCard label="Schools" value={String(schools.length)} />

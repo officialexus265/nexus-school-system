@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/auth/sign-in-gate.test.ts",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "db:cleanup-users": "node scripts/neon-cleanup-users.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

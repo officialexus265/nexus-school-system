@@ -15,7 +15,11 @@ export const Route = createRootRoute({
         name: "description",
         content: "NEXUS is the operating system for schools — multi-tenant academics, finance, results and a branded parent portal.",
       },
-      { name: "theme-color", content: "#101418" },
+      { name: "theme-color", content: "#0f766e" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "apple-mobile-web-app-title", content: "NEXUS" },
       { property: "og:title", content: APP_NAME },
       {
         property: "og:description",

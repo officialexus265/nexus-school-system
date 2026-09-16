@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { AUTH_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -7,47 +7,74 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { bootstrapPlatformOwner } from "@/lib/nexus/server";
+import {
+  bootstrapPlatformOwner,
+  platformBootstrapStatus,
+} from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/login")({ component: Login });
 
-function EmailPasswordForm() {
-  const [mode, setMode] = useState<"sign-in" | "bootstrap">("sign-in");
+function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boolean }) {
+  const [mode, setMode] = useState<"sign-in" | "bootstrap">(
+    canCreateFirstOwner ? "bootstrap" : "sign-in",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
+  useEffect(() => {
+    if (!canCreateFirstOwner && mode === "bootstrap") setMode("sign-in");
+  }, [canCreateFirstOwner, mode]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setPending(true);
     try {
-      if (mode === "bootstrap") {
-        // Create account then promote to platform owner (only works if none exist)
+      if (mode === "bootstrap" && canCreateFirstOwner) {
         const { error: signUpError } = await authClient.signUp.email({
           email,
           password,
           name: name || "Platform Owner",
           callbackURL: "/app/platform",
         });
+
         if (signUpError) {
-          setError(signUpError.message ?? "Could not create account");
-          setPending(false);
-          return;
+          const { error: signInError } = await authClient.signIn.email({
+            email,
+            password,
+            callbackURL: "/app/platform",
+          });
+          if (signInError) {
+            setError(
+              "This email is already registered. Use Sign in with the same password, " +
+                "then Claim super admin on Platform if needed.",
+            );
+            setPending(false);
+            return;
+          }
+        } else {
+          await authClient.signIn.email({
+            email,
+            password,
+            callbackURL: "/app/platform",
+          });
         }
+
         try {
           await bootstrapPlatformOwner({ data: { email } });
         } catch (err) {
           setError(
             err instanceof Error
               ? err.message
-              : "Account created but could not become platform owner. Sign in and contact support.",
+              : "Signed in but not promoted. Open Platform → Claim super admin.",
           );
           setPending(false);
           return;
         }
+
         window.location.href = "/app/platform";
         return;
       }
@@ -62,6 +89,13 @@ function EmailPasswordForm() {
         setPending(false);
         return;
       }
+      if (canCreateFirstOwner) {
+        try {
+          await bootstrapPlatformOwner({ data: { email } });
+        } catch {
+          /* ignore */
+        }
+      }
       window.location.href = "/app";
     } catch {
       setError("Something went wrong. Try again.");
@@ -71,7 +105,7 @@ function EmailPasswordForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      {mode === "bootstrap" && (
+      {mode === "bootstrap" && canCreateFirstOwner && (
         <div className="space-y-1.5">
           <Label htmlFor="name" className="text-mist">
             Your name
@@ -120,30 +154,45 @@ function EmailPasswordForm() {
       >
         {pending
           ? "Please wait…"
-          : mode === "bootstrap"
-            ? "Create platform owner"
+          : mode === "bootstrap" && canCreateFirstOwner
+            ? "Create super admin (platform owner)"
             : "Sign in"}
       </Button>
       <p className="text-center text-xs text-mist">
-        School owners do not self-register. You open their accounts from the Platform dashboard;
-        they set a password via the invite email link.
+        School staff sign in here after you invite them. Parents use the school parent app / PWA.
       </p>
-      <button
-        type="button"
-        onClick={() => setMode(mode === "sign-in" ? "bootstrap" : "sign-in")}
-        className="w-full text-center text-xs text-mist underline-offset-4 hover:underline"
-      >
-        {mode === "sign-in"
-          ? "First time? Create the platform owner account"
-          : "Back to sign in"}
-      </button>
+      {canCreateFirstOwner ? (
+        <button
+          type="button"
+          onClick={() => setMode(mode === "sign-in" ? "bootstrap" : "sign-in")}
+          className="w-full text-center text-xs text-mist underline-offset-4 hover:underline"
+        >
+          {mode === "sign-in"
+            ? "First time? Create the platform super admin"
+            : "Back to sign in"}
+        </button>
+      ) : (
+        <p className="text-center text-xs text-mist">
+          Platform owner already set. Sign in with your admin email.
+        </p>
+      )}
     </form>
   );
 }
 
 function Login() {
   const { user, isPending } = useCurrentUserState();
-  if (isPending) return <Skeleton className="mx-auto mt-24 h-80 max-w-md" />;
+  const [status, setStatus] = useState<{
+    canCreateFirstOwner: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    void platformBootstrapStatus()
+      .then((s) => setStatus({ canCreateFirstOwner: s.canCreateFirstOwner }))
+      .catch(() => setStatus({ canCreateFirstOwner: true }));
+  }, []);
+
+  if (isPending || !status) return <Skeleton className="mx-auto mt-24 h-80 max-w-md" />;
   if (user) return <Navigate to="/app" />;
 
   return (
@@ -154,7 +203,7 @@ function Login() {
           <h1 className="font-display text-2xl tracking-tight">NEXUS</h1>
           <p className="text-sm text-mist">
             Platform operators and invited school staff sign in here. Parents use the school
-            app, not this page.
+            parent app, not this page.
           </p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-ink-2 p-6 shadow-xl">
@@ -175,13 +224,10 @@ function Login() {
                   ))}
                 </div>
               )}
-              <EmailPasswordForm />
+              <EmailPasswordForm canCreateFirstOwner={status.canCreateFirstOwner} />
             </>
           ) : (
-            <p className="text-sm text-mist">
-              Auth is disabled (`VITE_AUTH_ENABLED=false`). Set it to true and use Better Auth
-              credentials.
-            </p>
+            <p className="text-sm text-mist">Auth is disabled. Set VITE_AUTH_ENABLED=true</p>
           )}
         </div>
         <p className="mt-6 text-center text-xs text-mist">

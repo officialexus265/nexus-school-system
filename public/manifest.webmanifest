@@ -1,17 +1,19 @@
 {
-  "name": "NEXUS",
+  "name": "NEXUS School",
   "short_name": "NEXUS",
-  "description": "The operating system for schools — academics, finance, results and a branded parent portal.",
-  "start_url": "/",
+  "description": "School operations — academics, finance, attendance, results. Staff install this app; parents use the school-branded parent app.",
+  "start_url": "/app",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#101418",
-  "theme_color": "#101418",
+  "theme_color": "#0f766e",
   "icons": [
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ]
 }
