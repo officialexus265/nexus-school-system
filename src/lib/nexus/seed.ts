@@ -923,5 +923,22 @@ export async function ensureWorkspace(sql: Sql, userId: string) {
     select user_id from nexus_workspaces where user_id = ${userId}
   `;
   if (existing.length) return;
+
+  // Demo school data is OPT-IN only (SEED_DEMO=true).
+  // Production: platform owner creates schools; school owners get memberships via invite.
+  const seedDemo =
+    (typeof process !== "undefined" &&
+      process.env.SEED_DEMO?.trim().toLowerCase() === "true") ||
+    (typeof process !== "undefined" &&
+      process.env.VITE_SEED_DEMO?.trim().toLowerCase() === "true");
+
+  if (!seedDemo) {
+    await sql.query(
+      `insert into nexus_workspaces (user_id, seeded_at) values ($1, now())
+       on conflict (user_id) do nothing`,
+      [userId],
+    );
+    return;
+  }
   await seedWorkspace(sql, userId);
 }

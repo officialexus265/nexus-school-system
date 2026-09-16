@@ -12,12 +12,12 @@ type SessionState = {
 };
 
 export const PERSONAS: { id: Persona; label: string; blurb: string }[] = [
-  { id: "owner", label: "School owner", blurb: "Full authority inside Sunrise Academy" },
+  { id: "owner", label: "School owner", blurb: "Full authority inside the school" },
   { id: "head", label: "Head teacher", blurb: "Academic oversight and result approval" },
-  { id: "teacher", label: "Teacher · Mr. James Banda", blurb: "Mathematics, Forms 1–2" },
+  { id: "teacher", label: "Teacher", blurb: "Classes and marks" },
   { id: "exam", label: "Examination officer", blurb: "Marks, ranking and publication" },
   { id: "bursar", label: "Bursar", blurb: "Fees, receipts and outstanding balances" },
-  { id: "parent", label: "Parent · Agnes Banda", blurb: "John (Form 2A) and Mary (Std 5)" },
+  { id: "parent", label: "Parent", blurb: "Linked children only" },
   { id: "platform", label: "Platform owner", blurb: "Schools, billing and activation" },
 ];
 

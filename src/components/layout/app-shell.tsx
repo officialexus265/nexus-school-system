@@ -125,8 +125,17 @@ function NavLinks({
 }
 
 function PersonaSwitch() {
+  // Demo role tour — off by default. Set VITE_DEMO_PERSONAS=true to re-enable.
+  const demoPersonas = import.meta.env.VITE_DEMO_PERSONAS === "true";
   const persona = useNexusSession((s) => s.persona);
   const setPersona = useNexusSession((s) => s.setPersona);
+  if (!demoPersonas) {
+    return (
+      <div className="rounded-lg bg-card px-2.5 py-2 text-xs text-muted-foreground shadow-[var(--shadow-border)]">
+        Signed in · use Platform or school menus
+      </div>
+    );
+  }
   const current = PERSONAS.find((p) => p.id === persona)!;
   return (
     <DropdownMenu>
@@ -175,7 +184,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <NexusWordmark />
         </Link>
         <p className="mt-3 px-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-          Sunrise Academy
+          NEXUS
         </p>
       </div>
       <div className="flex-1 overflow-y-auto px-2">

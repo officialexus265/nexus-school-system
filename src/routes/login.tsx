@@ -7,11 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { bootstrapPlatformOwner } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/login")({ component: Login });
 
 function EmailPasswordForm() {
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mode, setMode] = useState<"sign-in" | "bootstrap">("sign-in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,12 +24,41 @@ function EmailPasswordForm() {
     setError(null);
     setPending(true);
     try {
-      const { error: authError } =
-        mode === "sign-in"
-          ? await authClient.signIn.email({ email, password, callbackURL: "/app" })
-          : await authClient.signUp.email({ email, password, name, callbackURL: "/app" });
+      if (mode === "bootstrap") {
+        // Create account then promote to platform owner (only works if none exist)
+        const { error: signUpError } = await authClient.signUp.email({
+          email,
+          password,
+          name: name || "Platform Owner",
+          callbackURL: "/app/platform",
+        });
+        if (signUpError) {
+          setError(signUpError.message ?? "Could not create account");
+          setPending(false);
+          return;
+        }
+        try {
+          await bootstrapPlatformOwner({ data: { email } });
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Account created but could not become platform owner. Sign in and contact support.",
+          );
+          setPending(false);
+          return;
+        }
+        window.location.href = "/app/platform";
+        return;
+      }
+
+      const { error: authError } = await authClient.signIn.email({
+        email,
+        password,
+        callbackURL: "/app",
+      });
       if (authError) {
-        setError(authError.message ?? "Something went wrong. Try again.");
+        setError(authError.message ?? "Invalid email or password");
         setPending(false);
         return;
       }
@@ -41,10 +71,10 @@ function EmailPasswordForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      {mode === "sign-up" && (
+      {mode === "bootstrap" && (
         <div className="space-y-1.5">
           <Label htmlFor="name" className="text-mist">
-            Name
+            Your name
           </Label>
           <Input
             id="name"
@@ -88,14 +118,24 @@ function EmailPasswordForm() {
         disabled={pending}
         className="h-11 w-full bg-foam text-ink hover:bg-foam/90"
       >
-        {pending ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create account"}
+        {pending
+          ? "Please wait…"
+          : mode === "bootstrap"
+            ? "Create platform owner"
+            : "Sign in"}
       </Button>
+      <p className="text-center text-xs text-mist">
+        School owners do not self-register. You open their accounts from the Platform dashboard;
+        they set a password via the invite email link.
+      </p>
       <button
         type="button"
-        onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+        onClick={() => setMode(mode === "sign-in" ? "bootstrap" : "sign-in")}
         className="w-full text-center text-xs text-mist underline-offset-4 hover:underline"
       >
-        {mode === "sign-in" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+        {mode === "sign-in"
+          ? "First time? Create the platform owner account"
+          : "Back to sign in"}
       </button>
     </form>
   );
@@ -103,62 +143,53 @@ function EmailPasswordForm() {
 
 function Login() {
   const { user, isPending } = useCurrentUserState();
-  if (isPending) {
-    return (
-      <main className="grid min-h-dvh place-items-center bg-ink">
-        <Skeleton className="h-48 w-80 bg-ink-3" />
-      </main>
-    );
-  }
+  if (isPending) return <Skeleton className="mx-auto mt-24 h-80 max-w-md" />;
   if (user) return <Navigate to="/app" />;
 
   return (
-    <main className="relative min-h-dvh bg-ink text-foam">
-      <div className="ledger-grid pointer-events-none absolute inset-0 opacity-40" />
-      <div className="relative mx-auto flex min-h-dvh max-w-md flex-col justify-center px-6 py-16">
-        <Link to="/" className="mb-10 flex items-center gap-2 text-foam">
-          <NexusMark className="text-foam" />
-          <span className="font-display text-2xl font-medium tracking-tight">NEXUS</span>
-        </Link>
-        <h1 className="font-display text-4xl font-medium tracking-tight">Enter the desk.</h1>
-        <p className="mt-3 text-sm leading-relaxed text-mist">
-          School owners, teachers and platform operators sign in here. Parents use the same
-          workspace after you switch role inside.
-        </p>
-        {authEnabled ? (
-          <div className="mt-8 space-y-4">
-            <EmailPasswordForm />
-            {AUTH_PROVIDERS.length > 0 && (
-              <>
-                <div className="flex items-center gap-3 text-xs text-mist">
-                  <div className="h-px flex-1 bg-white/10" />
-                  or
-                  <div className="h-px flex-1 bg-white/10" />
-                </div>
-                <div className="space-y-3">
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-ink px-4 py-12 text-foam">
+      <div className="w-full max-w-md">
+        <div className="mb-8 flex flex-col items-center gap-3 text-center">
+          <NexusMark className="size-12" />
+          <h1 className="font-display text-2xl tracking-tight">NEXUS</h1>
+          <p className="text-sm text-mist">
+            Platform operators and invited school staff sign in here. Parents use the school
+            app, not this page.
+          </p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-ink-2 p-6 shadow-xl">
+          {authEnabled ? (
+            <>
+              {AUTH_PROVIDERS.length > 0 && (
+                <div className="mb-4 space-y-2">
                   {AUTH_PROVIDERS.map((p) => (
                     <Button
                       key={p.id}
                       type="button"
-                      variant="secondary"
-                      className="h-11 w-full bg-ink-3 text-foam hover:bg-ink-3/80"
-                      onClick={() => signIn(p.id, { callbackURL: "/app" })}
+                      variant="outline"
+                      className="w-full border-white/10"
+                      onClick={() => void signIn(p.id, "/app")}
                     >
                       Continue with {p.label}
                     </Button>
                   ))}
                 </div>
-              </>
-            )}
-          </div>
-        ) : (
-          <p className="mt-8 text-sm text-mist">Sign-in is disabled.</p>
-        )}
-        <p className="mt-8 text-xs text-mist">
-          Opening the workspace provisions Sunrise Academy with live Term 2 records for this
-          account only.
+              )}
+              <EmailPasswordForm />
+            </>
+          ) : (
+            <p className="text-sm text-mist">
+              Auth is disabled (`VITE_AUTH_ENABLED=false`). Set it to true and use Better Auth
+              credentials.
+            </p>
+          )}
+        </div>
+        <p className="mt-6 text-center text-xs text-mist">
+          <Link to="/" className="underline-offset-4 hover:underline">
+            Back to home
+          </Link>
         </p>
       </div>
-    </main>
+    </div>
   );
 }

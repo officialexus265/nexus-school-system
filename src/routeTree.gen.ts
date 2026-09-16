@@ -13,25 +13,25 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetPasswordRouteImport } from './routes/set-password'
+import { Route as PSlugRouteImport } from './routes/p/$slug'
+import { Route as ApplySlugRouteImport } from './routes/apply/$slug'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppAcademicsRouteImport } from './routes/app/academics'
-import { Route as AppAdmissionsRouteImport } from './routes/app/admissions'
 import { Route as AppAnnouncementsRouteImport } from './routes/app/announcements'
 import { Route as AppAttendanceRouteImport } from './routes/app/attendance'
 import { Route as AppBehaviourRouteImport } from './routes/app/behaviour'
-import { Route as AppCalendarRouteImport } from './routes/app/calendar'
-import { Route as AppDocumentsRouteImport } from './routes/app/documents'
 import { Route as AppFinanceRouteImport } from './routes/app/finance'
-import { Route as AppInvoicesRouteImport } from './routes/app/invoices'
 import { Route as AppPeopleRouteImport } from './routes/app/people'
 import { Route as AppPlatformRouteImport } from './routes/app/platform'
 import { Route as AppResultsRouteImport } from './routes/app/results'
 import { Route as AppSettingsRouteImport } from './routes/app/settings'
 import { Route as AppSetupRouteImport } from './routes/app/setup'
-import { Route as AppStudentsRouteImport } from './routes/app/students'
+import { Route as AppInvoicesRouteImport } from './routes/app/invoices'
+import { Route as AppAdmissionsRouteImport } from './routes/app/admissions'
 import { Route as AppToolsRouteImport } from './routes/app/tools'
-import { Route as ApplySlugRouteImport } from './routes/apply/$slug'
-import { Route as PSlugRouteImport } from './routes/p/$slug'
+import { Route as AppDocumentsRouteImport } from './routes/app/documents'
+import { Route as AppCalendarRouteImport } from './routes/app/calendar'
+import { Route as AppStudentsRouteImport } from './routes/app/students'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiPaychanguWebhookRouteImport } from './routes/api/paychangu/webhook'
 import { Route as AppStudentsStudentIdRouteImport } from './routes/app/students.$studentId'
@@ -56,6 +56,16 @@ const SetPasswordRoute = SetPasswordRouteImport.update({
   path: '/set-password',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PSlugRoute = PSlugRouteImport.update({
+  id: '/p/$slug',
+  path: '/p/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApplySlugRoute = ApplySlugRouteImport.update({
+  id: '/apply/$slug',
+  path: '/apply/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -64,11 +74,6 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppAcademicsRoute = AppAcademicsRouteImport.update({
   id: '/academics',
   path: '/academics',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppAdmissionsRoute = AppAdmissionsRouteImport.update({
-  id: '/admissions',
-  path: '/admissions',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppAnnouncementsRoute = AppAnnouncementsRouteImport.update({
@@ -86,24 +91,9 @@ const AppBehaviourRoute = AppBehaviourRouteImport.update({
   path: '/behaviour',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppCalendarRoute = AppCalendarRouteImport.update({
-  id: '/calendar',
-  path: '/calendar',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppDocumentsRoute = AppDocumentsRouteImport.update({
-  id: '/documents',
-  path: '/documents',
-  getParentRoute: () => AppRouteRoute,
-} as any)
 const AppFinanceRoute = AppFinanceRouteImport.update({
   id: '/finance',
   path: '/finance',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppInvoicesRoute = AppInvoicesRouteImport.update({
-  id: '/invoices',
-  path: '/invoices',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppPeopleRoute = AppPeopleRouteImport.update({
@@ -131,9 +121,14 @@ const AppSetupRoute = AppSetupRouteImport.update({
   path: '/setup',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppStudentsRoute = AppStudentsRouteImport.update({
-  id: '/students',
-  path: '/students',
+const AppInvoicesRoute = AppInvoicesRouteImport.update({
+  id: '/invoices',
+  path: '/invoices',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdmissionsRoute = AppAdmissionsRouteImport.update({
+  id: '/admissions',
+  path: '/admissions',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppToolsRoute = AppToolsRouteImport.update({
@@ -141,15 +136,20 @@ const AppToolsRoute = AppToolsRouteImport.update({
   path: '/tools',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const ApplySlugRoute = ApplySlugRouteImport.update({
-  id: '/apply/$slug',
-  path: '/apply/$slug',
-  getParentRoute: () => rootRouteImport,
+const AppDocumentsRoute = AppDocumentsRouteImport.update({
+  id: '/documents',
+  path: '/documents',
+  getParentRoute: () => AppRouteRoute,
 } as any)
-const PSlugRoute = PSlugRouteImport.update({
-  id: '/p/$slug',
-  path: '/p/$slug',
-  getParentRoute: () => rootRouteImport,
+const AppCalendarRoute = AppCalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppStudentsRoute = AppStudentsRouteImport.update({
+  id: '/students',
+  path: '/students',
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -172,24 +172,21 @@ export interface FileRoutesByFullPath {
   '/app': typeof AppRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/set-password': typeof SetPasswordRoute
+  '/p/$slug': typeof PSlugRoute
+  '/apply/$slug': typeof ApplySlugRoute
   '/app/academics': typeof AppAcademicsRoute
-  '/app/admissions': typeof AppAdmissionsRoute
   '/app/announcements': typeof AppAnnouncementsRoute
   '/app/attendance': typeof AppAttendanceRoute
   '/app/behaviour': typeof AppBehaviourRoute
-  '/app/calendar': typeof AppCalendarRoute
-  '/app/documents': typeof AppDocumentsRoute
   '/app/finance': typeof AppFinanceRoute
-  '/app/invoices': typeof AppInvoicesRoute
   '/app/people': typeof AppPeopleRoute
   '/app/platform': typeof AppPlatformRoute
   '/app/results': typeof AppResultsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/setup': typeof AppSetupRoute
+  '/app/invoices': typeof AppInvoicesRoute
+  '/app/calendar': typeof AppCalendarRoute
   '/app/students': typeof AppStudentsRouteWithChildren
-  '/app/tools': typeof AppToolsRoute
-  '/apply/$slug': typeof ApplySlugRoute
-  '/p/$slug': typeof PSlugRoute
   '/app/': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/paychangu/webhook': typeof ApiPaychanguWebhookRoute
@@ -199,24 +196,21 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/set-password': typeof SetPasswordRoute
+  '/p/$slug': typeof PSlugRoute
+  '/apply/$slug': typeof ApplySlugRoute
   '/app/academics': typeof AppAcademicsRoute
-  '/app/admissions': typeof AppAdmissionsRoute
   '/app/announcements': typeof AppAnnouncementsRoute
   '/app/attendance': typeof AppAttendanceRoute
   '/app/behaviour': typeof AppBehaviourRoute
-  '/app/calendar': typeof AppCalendarRoute
-  '/app/documents': typeof AppDocumentsRoute
   '/app/finance': typeof AppFinanceRoute
-  '/app/invoices': typeof AppInvoicesRoute
   '/app/people': typeof AppPeopleRoute
   '/app/platform': typeof AppPlatformRoute
   '/app/results': typeof AppResultsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/setup': typeof AppSetupRoute
+  '/app/invoices': typeof AppInvoicesRoute
+  '/app/calendar': typeof AppCalendarRoute
   '/app/students': typeof AppStudentsRouteWithChildren
-  '/app/tools': typeof AppToolsRoute
-  '/apply/$slug': typeof ApplySlugRoute
-  '/p/$slug': typeof PSlugRoute
   '/app': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/paychangu/webhook': typeof ApiPaychanguWebhookRoute
@@ -228,24 +222,21 @@ export interface FileRoutesById {
   '/app': typeof AppRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/set-password': typeof SetPasswordRoute
+  '/p/$slug': typeof PSlugRoute
+  '/apply/$slug': typeof ApplySlugRoute
   '/app/academics': typeof AppAcademicsRoute
-  '/app/admissions': typeof AppAdmissionsRoute
   '/app/announcements': typeof AppAnnouncementsRoute
   '/app/attendance': typeof AppAttendanceRoute
   '/app/behaviour': typeof AppBehaviourRoute
-  '/app/calendar': typeof AppCalendarRoute
-  '/app/documents': typeof AppDocumentsRoute
   '/app/finance': typeof AppFinanceRoute
-  '/app/invoices': typeof AppInvoicesRoute
   '/app/people': typeof AppPeopleRoute
   '/app/platform': typeof AppPlatformRoute
   '/app/results': typeof AppResultsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/setup': typeof AppSetupRoute
+  '/app/invoices': typeof AppInvoicesRoute
+  '/app/calendar': typeof AppCalendarRoute
   '/app/students': typeof AppStudentsRouteWithChildren
-  '/app/tools': typeof AppToolsRoute
-  '/apply/$slug': typeof ApplySlugRoute
-  '/p/$slug': typeof PSlugRoute
   '/app/': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/paychangu/webhook': typeof ApiPaychanguWebhookRoute
@@ -258,54 +249,44 @@ export interface FileRouteTypes {
     | '/app'
     | '/login'
     | '/set-password'
+    | '/p/$slug'
     | '/app/academics'
-    | '/app/admissions'
     | '/app/announcements'
     | '/app/attendance'
     | '/app/behaviour'
-    | '/app/calendar'
-    | '/app/documents'
     | '/app/finance'
-    | '/app/invoices'
     | '/app/people'
     | '/app/platform'
     | '/app/results'
     | '/app/settings'
     | '/app/setup'
+    | '/app/invoices'
+    | '/app/calendar'
     | '/app/students'
-    | '/app/tools'
-    | '/apply/$slug'
-    | '/p/$slug'
     | '/app/'
     | '/api/auth/$'
-    | '/api/paychangu/webhook'
     | '/app/students/$studentId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
     | '/set-password'
+    | '/p/$slug'
     | '/app/academics'
-    | '/app/admissions'
     | '/app/announcements'
     | '/app/attendance'
     | '/app/behaviour'
-    | '/app/calendar'
-    | '/app/documents'
     | '/app/finance'
-    | '/app/invoices'
     | '/app/people'
     | '/app/platform'
     | '/app/results'
     | '/app/settings'
     | '/app/setup'
+    | '/app/invoices'
+    | '/app/calendar'
     | '/app/students'
-    | '/app/tools'
-    | '/apply/$slug'
-    | '/p/$slug'
     | '/app'
     | '/api/auth/$'
-    | '/api/paychangu/webhook'
     | '/app/students/$studentId'
   id:
     | '__root__'
@@ -313,27 +294,22 @@ export interface FileRouteTypes {
     | '/app'
     | '/login'
     | '/set-password'
+    | '/p/$slug'
     | '/app/academics'
-    | '/app/admissions'
     | '/app/announcements'
     | '/app/attendance'
     | '/app/behaviour'
-    | '/app/calendar'
-    | '/app/documents'
     | '/app/finance'
-    | '/app/invoices'
     | '/app/people'
     | '/app/platform'
     | '/app/results'
     | '/app/settings'
     | '/app/setup'
+    | '/app/invoices'
+    | '/app/calendar'
     | '/app/students'
-    | '/app/tools'
-    | '/apply/$slug'
-    | '/p/$slug'
     | '/app/'
     | '/api/auth/$'
-    | '/api/paychangu/webhook'
     | '/app/students/$studentId'
   fileRoutesById: FileRoutesById
 }
@@ -342,10 +318,8 @@ export interface RootRouteChildren {
   AppRouteRoute: typeof AppRouteRouteWithChildren
   LoginRoute: typeof LoginRoute
   SetPasswordRoute: typeof SetPasswordRoute
-  ApplySlugRoute: typeof ApplySlugRoute
   PSlugRoute: typeof PSlugRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
-  ApiPaychanguWebhookRoute: typeof ApiPaychanguWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -378,6 +352,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/$slug': {
+      id: '/p/$slug'
+      path: '/p/$slug'
+      fullPath: '/p/$slug'
+      preLoaderRoute: typeof PSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/': {
       id: '/app/'
       path: '/'
@@ -390,13 +371,6 @@ declare module '@tanstack/react-router' {
       path: '/academics'
       fullPath: '/app/academics'
       preLoaderRoute: typeof AppAcademicsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/admissions': {
-      id: '/app/admissions'
-      path: '/admissions'
-      fullPath: '/app/admissions'
-      preLoaderRoute: typeof AppAdmissionsRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/app/announcements': {
@@ -420,32 +394,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBehaviourRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/calendar': {
-      id: '/app/calendar'
-      path: '/calendar'
-      fullPath: '/app/calendar'
-      preLoaderRoute: typeof AppCalendarRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/documents': {
-      id: '/app/documents'
-      path: '/documents'
-      fullPath: '/app/documents'
-      preLoaderRoute: typeof AppDocumentsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
     '/app/finance': {
       id: '/app/finance'
       path: '/finance'
       fullPath: '/app/finance'
       preLoaderRoute: typeof AppFinanceRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/invoices': {
-      id: '/app/invoices'
-      path: '/invoices'
-      fullPath: '/app/invoices'
-      preLoaderRoute: typeof AppInvoicesRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/app/people': {
@@ -483,11 +436,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSetupRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/students': {
-      id: '/app/students'
-      path: '/students'
-      fullPath: '/app/students'
-      preLoaderRoute: typeof AppStudentsRouteImport
+    '/app/invoices': {
+      id: '/app/invoices'
+      path: '/invoices'
+      fullPath: '/app/invoices'
+      preLoaderRoute: typeof AppInvoicesRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/app/admissions': {
+      id: '/app/admissions'
+      path: '/admissions'
+      fullPath: '/app/admissions'
+      preLoaderRoute: typeof AppAdmissionsRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/app/tools': {
@@ -497,32 +457,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppToolsRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/apply/$slug': {
-      id: '/apply/$slug'
-      path: '/apply/$slug'
-      fullPath: '/apply/$slug'
-      preLoaderRoute: typeof ApplySlugRouteImport
-      parentRoute: typeof rootRouteImport
+    '/app/documents': {
+      id: '/app/documents'
+      path: '/documents'
+      fullPath: '/app/documents'
+      preLoaderRoute: typeof AppDocumentsRouteImport
+      parentRoute: typeof AppRouteRoute
     }
-    '/p/$slug': {
-      id: '/p/$slug'
-      path: '/p/$slug'
-      fullPath: '/p/$slug'
-      preLoaderRoute: typeof PSlugRouteImport
-      parentRoute: typeof rootRouteImport
+    '/app/calendar': {
+      id: '/app/calendar'
+      path: '/calendar'
+      fullPath: '/app/calendar'
+      preLoaderRoute: typeof AppCalendarRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/app/students': {
+      id: '/app/students'
+      path: '/students'
+      fullPath: '/app/students'
+      preLoaderRoute: typeof AppStudentsRouteImport
+      parentRoute: typeof AppRouteRoute
     }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/paychangu/webhook': {
-      id: '/api/paychangu/webhook'
-      path: '/api/paychangu/webhook'
-      fullPath: '/api/paychangu/webhook'
-      preLoaderRoute: typeof ApiPaychanguWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/students/$studentId': {
@@ -549,41 +509,32 @@ const AppStudentsRouteWithChildren = AppStudentsRoute._addFileChildren(
 
 interface AppRouteRouteChildren {
   AppAcademicsRoute: typeof AppAcademicsRoute
-  AppAdmissionsRoute: typeof AppAdmissionsRoute
   AppAnnouncementsRoute: typeof AppAnnouncementsRoute
   AppAttendanceRoute: typeof AppAttendanceRoute
   AppBehaviourRoute: typeof AppBehaviourRoute
-  AppCalendarRoute: typeof AppCalendarRoute
-  AppDocumentsRoute: typeof AppDocumentsRoute
   AppFinanceRoute: typeof AppFinanceRoute
-  AppInvoicesRoute: typeof AppInvoicesRoute
   AppPeopleRoute: typeof AppPeopleRoute
   AppPlatformRoute: typeof AppPlatformRoute
   AppResultsRoute: typeof AppResultsRoute
   AppSettingsRoute: typeof AppSettingsRoute
-  AppSetupRoute: typeof AppSetupRoute
   AppStudentsRoute: typeof AppStudentsRouteWithChildren
-  AppToolsRoute: typeof AppToolsRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppAcademicsRoute: AppAcademicsRoute,
-  AppAdmissionsRoute: AppAdmissionsRoute,
   AppAnnouncementsRoute: AppAnnouncementsRoute,
   AppAttendanceRoute: AppAttendanceRoute,
   AppBehaviourRoute: AppBehaviourRoute,
-  AppCalendarRoute: AppCalendarRoute,
-  AppDocumentsRoute: AppDocumentsRoute,
   AppFinanceRoute: AppFinanceRoute,
-  AppInvoicesRoute: AppInvoicesRoute,
   AppPeopleRoute: AppPeopleRoute,
   AppPlatformRoute: AppPlatformRoute,
   AppResultsRoute: AppResultsRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppSetupRoute: AppSetupRoute,
+  AppInvoicesRoute: AppInvoicesRoute,
+  AppCalendarRoute: AppCalendarRoute,
   AppStudentsRoute: AppStudentsRouteWithChildren,
-  AppToolsRoute: AppToolsRoute,
   AppIndexRoute: AppIndexRoute,
 }
 
@@ -596,8 +547,8 @@ const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   LoginRoute: LoginRoute,
   SetPasswordRoute: SetPasswordRoute,
-  ApplySlugRoute: ApplySlugRoute,
   PSlugRoute: PSlugRoute,
+  ApplySlugRoute: ApplySlugRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPaychanguWebhookRoute: ApiPaychanguWebhookRoute,
 }

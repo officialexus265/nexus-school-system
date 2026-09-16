@@ -53,14 +53,91 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
   const sql = await getSql();
   await ensureWorkspace(sql, userId);
 
-  const schools = await sql<School>`
+  // Prefer memberships + platform access over legacy user_id isolation
+  let schools = await sql<School>`
     select * from schools where user_id = ${userId} order by name
   `;
+  try {
+    const { accessibleSchoolIds, isPlatformOwner } = await import("./tenancy");
+    const access = await accessibleSchoolIds(userId);
+    if (access.platform || access.schoolIds.length) {
+      const ids = access.schoolIds.length
+        ? access.schoolIds
+        : (await sql<{ id: string }>`select id from schools`).map((r) => r.id);
+      if (ids.length) {
+        schools = await sql<School>`
+          select * from schools where id = any(${ids}::text[]) order by name
+        `;
+      }
+    }
+  } catch {
+    /* tenancy helpers / columns may be missing on first boot */
+  }
+
   const school =
     schools.find((s) => s.slug === schoolSlug) ??
     schools.find((s) => s.slug === "sunrise") ??
     schools[0];
-  if (!school) throw new Error("No school in workspace");
+  if (!school) {
+    // Empty workspace: return a minimal placeholder so Platform UI can open schools
+    const placeholder: School = {
+      id: "none",
+      user_id: userId,
+      slug: "none",
+      name: "No school yet",
+      registration_number: null,
+      address: null,
+      district: null,
+      city: null,
+      country: "Malawi",
+      phone: null,
+      email: null,
+      website: null,
+      motto: null,
+      school_type: null,
+      boarding_status: null,
+      status: "DORMANT",
+      logo_mark: "N",
+      primary_color: "#0f766e",
+      secondary_color: "#f3f0e8",
+      timezone: "Africa/Blantyre",
+      currency: "MWK",
+      subscription_plan: null,
+      activation_fee: null,
+      student_capacity: null,
+      parent_app_name: null,
+      parent_app_slug: null,
+      owner_name: null,
+      owner_email: null,
+      owner_user_id: null,
+    } as School;
+    return {
+      school: placeholder,
+      schools: [],
+      staff: [],
+      classes: [],
+      subjects: [],
+      assignments: [],
+      students: [],
+      parents: [],
+      parentLinks: [],
+      years: [],
+      terms: [],
+      assessments: [],
+      scores: [],
+      submissions: [],
+      results: [],
+      attendance: [],
+      behaviour: [],
+      fees: [],
+      charges: [],
+      payments: [],
+      announcements: [],
+      notifications: [],
+      audit: [],
+      events: [],
+    } as Snapshot;
+  }
   const sid = school.id;
 
   const [
@@ -1869,6 +1946,36 @@ export const linkOwnerMembership = createServerFn({ method: "POST" })
       );
     } catch { /* ignore */ }
 
+    return { ok: true };
+  });
+
+
+/** First-run only: promote the signed-in user (or email) to platform owner. */
+export const bootstrapPlatformOwner = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { email?: string }) => data)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const any = await sql<{ c: number }>`
+      select count(*)::int as c from "user" where is_platform_owner = true
+    `;
+    if ((any[0]?.c ?? 0) > 0) {
+      throw new Error(
+        "A platform owner already exists. Sign in with that account, or ask them to grant access.",
+      );
+    }
+    const email = (data.email || "").trim().toLowerCase();
+    if (email) {
+      await sql.query(
+        `update "user" set is_platform_owner = true where lower(email) = $1`,
+        [email],
+      );
+    } else {
+      await sql.query(
+        `update "user" set is_platform_owner = true where id = $1`,
+        [context.userId],
+      );
+    }
     return { ok: true };
   });
 
