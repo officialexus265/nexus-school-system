@@ -128,7 +128,7 @@ function PeoplePage() {
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 required
-                placeholder="e.g. Agnes Banda"
+                placeholder="e.g. Parent full name"
               />
             </div>
             <div className="space-y-1.5">

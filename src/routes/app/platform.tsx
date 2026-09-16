@@ -8,17 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
-import { createSchoolInvite, transitionSchoolStatus } from "@/lib/nexus/server";
+import {
+  createSchoolInvite,
+  deleteSchool,
+  transitionSchoolStatus,
+  wipeAllSchools,
+} from "@/lib/nexus/server";
 import { money } from "@/lib/utils";
-import { useNexusSession } from "@/stores/session";
 
 export const Route = createFileRoute("/app/platform")({ component: PlatformPage });
 
 function PlatformPage() {
   const q = useSnapshot();
   const invalidate = useInvalidateSnapshot();
-  const setPersona = useNexusSession((s) => s.setPersona);
-
   const [showCreate, setShowCreate] = useState(false);
   const [schoolName, setSchoolName] = useState("");
   const [ownerName, setOwnerName] = useState("");
@@ -68,11 +70,28 @@ function PlatformPage() {
       <PageHeader
         kicker="NEXUS"
         title="Platform owner"
-        description="Open school accounts, send owner invites, activate and suspend schools. Data is never deleted for non-payment."
+        description="Open school accounts, invite owners, activate, suspend, or permanently delete schools."
         actions={
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setPersona("owner")}>
-              Enter demo school
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    "Delete ALL schools and related data? This cannot be undone.",
+                  )
+                )
+                  return;
+                try {
+                  const r = await wipeAllSchools();
+                  toast.success(`Removed ${r.deleted} school(s)`);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                }
+              }}
+            >
+              Wipe all schools
             </Button>
             <Button onClick={() => setShowCreate((v) => !v)}>
               {showCreate ? "Close form" : "Create school"}
@@ -275,6 +294,28 @@ function PlatformPage() {
                         }}
                       >
                         Suspend
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600"
+                        onClick={async () => {
+                          if (
+                            !window.confirm(
+                              `Permanently delete “${s.name}” and all its data?`,
+                            )
+                          )
+                            return;
+                          try {
+                            await deleteSchool({ data: { schoolId: s.id } });
+                            toast.success("School deleted");
+                            await invalidate();
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed");
+                          }
+                        }}
+                      >
+                        Delete
                       </Button>
                     </div>
                   )}

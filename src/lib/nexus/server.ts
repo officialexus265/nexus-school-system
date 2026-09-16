@@ -111,7 +111,9 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
       owner_email: null,
       owner_user_id: null,
     } as School;
+    const platform = await isPlatformOwner(userId).catch(() => false);
     return {
+      isPlatformOwner: platform,
       school: placeholder,
       schools: [],
       staff: [],
@@ -188,7 +190,9 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     sql<CalendarEvent>`select * from calendar_events where user_id = ${userId} and school_id = ${sid} order by event_date`,
   ]);
 
+  const platformFlag = await isPlatformOwner(userId).catch(() => false);
   return {
+    isPlatformOwner: platformFlag,
     schools,
     school,
     staff,
@@ -220,7 +224,7 @@ export const getSnapshot = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((data: { schoolSlug?: string }) => data ?? {})
   .handler(async ({ context, data }) => {
-    return loadSnapshot(context.userId, data.schoolSlug ?? "sunrise");
+    return loadSnapshot(context.userId, data.schoolSlug ?? "");
   });
 
 async function audit(
@@ -4734,4 +4738,91 @@ export const generateReportCard = createServerFn({ method: "POST" })
       position,
       generatedAt: new Date().toISOString(),
     };
+  });
+
+
+export const deleteSchool = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Only platform owner can delete schools");
+    const sql = await getSql();
+    const id = data.schoolId;
+    // Child tables may lack ON DELETE CASCADE on older rows — delete in order best-effort
+    const tables = [
+      "parent_students",
+      "assessment_scores",
+      "student_results",
+      "result_submissions",
+      "attendance",
+      "behaviour_records",
+      "student_charges",
+      "payments",
+      "payment_intents",
+      "assessments",
+      "teacher_assignments",
+      "students",
+      "parents",
+      "staff",
+      "classes",
+      "subjects",
+      "terms",
+      "academic_years",
+      "fee_structures",
+      "announcements",
+      "notifications",
+      "calendar_events",
+      "documents",
+      "messages",
+      "admission_applications",
+      "school_invites",
+      "parent_app_settings",
+      "school_sms_settings",
+      "school_setup_progress",
+      "user_school_memberships",
+      "platform_invoices",
+      "grading_scales",
+      "examinations",
+      "audit_logs",
+    ];
+    for (const table of tables) {
+      try {
+        await sql.query(`delete from ${table} where school_id = $1`, [id]);
+      } catch {
+        /* table or column may not exist */
+      }
+    }
+    await sql.query(`delete from schools where id = $1`, [id]);
+    return { ok: true };
+  });
+
+/** Remove every school and related row (fresh platform). */
+export const wipeAllSchools = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Only platform owner can wipe data");
+    const sql = await getSql();
+    const schools = await sql<{ id: string }>`select id from schools`;
+    for (const sch of schools) {
+      // reuse delete path by calling same logic inline
+      const id = sch.id;
+      const tables = [
+        "parent_students","assessment_scores","student_results","result_submissions",
+        "attendance","behaviour_records","student_charges","payments","payment_intents",
+        "assessments","teacher_assignments","students","parents","staff","classes",
+        "subjects","terms","academic_years","fee_structures","announcements",
+        "notifications","calendar_events","documents","messages","admission_applications",
+        "school_invites","parent_app_settings","school_sms_settings","school_setup_progress",
+        "user_school_memberships","platform_invoices","audit_logs",
+      ];
+      for (const table of tables) {
+        try { await sql.query(`delete from ${table} where school_id = $1`, [id]); } catch { /* */ }
+      }
+    }
+    await sql.query(`delete from schools`);
+    try { await sql.query(`delete from platform_invoice_events`); } catch { /* */ }
+    try { await sql.query(`delete from background_jobs`); } catch { /* */ }
+    return { ok: true, deleted: schools.length };
   });

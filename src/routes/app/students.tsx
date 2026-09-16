@@ -33,14 +33,7 @@ function StudentsPage() {
   if (q.isPending) return <Skeleton className="h-64" />;
   if (!q.data) return null;
   const snap = q.data;
-  const students =
-    persona === "teacher"
-      ? snap.students.filter((s) => {
-          const teacher = snap.staff.find((t) => t.full_name.includes("James Banda"));
-          const ids = new Set(snap.assignments.filter((a) => a.staff_id === teacher?.id).map((a) => a.class_id));
-          return s.class_id && ids.has(s.class_id);
-        })
-      : snap.students;
+  const students = snap.students;
 
   return (
     <div className={dark ? "text-foam" : ""}>
