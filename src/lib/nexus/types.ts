@@ -54,6 +54,60 @@ export type School = {
   activation_fee: string | number | null;
   student_capacity: number | null;
   created_at: string;
+  // Platform / invite fields (added in 0003)
+  owner_user_id?: string | null;
+  created_by?: string | null;
+  owner_name?: string | null;
+  owner_email?: string | null;
+  invite_token?: string | null;
+  invite_expires_at?: string | null;
+  password_set_at?: string | null;
+  parent_app_name?: string | null;
+  parent_app_icon_url?: string | null;
+  parent_app_slug?: string | null;
+};
+
+export type UserSchoolMembership = {
+  id: string;
+  user_id: string;
+  school_id: string;
+  role: string;
+  status: string;
+  created_at: string;
+};
+
+export type ParentAppSettings = {
+  id: string;
+  school_id: string;
+  app_name: string | null;
+  app_icon_url: string | null;
+  splash_color: string | null;
+  primary_color: string | null;
+  secondary_color: string | null;
+  results_enabled: boolean;
+  attendance_enabled: boolean;
+  behaviour_enabled: boolean;
+  fees_enabled: boolean;
+  assignments_enabled: boolean;
+  messages_enabled: boolean;
+  documents_enabled: boolean;
+  calendar_enabled: boolean;
+  published_at: string | null;
+  install_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SchoolInvite = {
+  id: string;
+  school_id: string;
+  email: string;
+  token: string;
+  role: string;
+  expires_at: string;
+  used_at: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
 export type Staff = {

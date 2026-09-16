@@ -45,6 +45,11 @@ const OWNER_NAV: NavItem[] = [
   { to: "/app/behaviour", label: "Behaviour", icon: Shield },
   { to: "/app/finance", label: "Finance", icon: Wallet },
   { to: "/app/announcements", label: "Notices", icon: Megaphone },
+  { to: "/app/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/app/documents", label: "Documents", icon: BookOpen },
+  { to: "/app/admissions", label: "Admissions", icon: GraduationCap },
+  { to: "/app/setup", label: "Setup wizard", icon: Settings },
+  { to: "/app/tools", label: "Tools", icon: Settings },
   { to: "/app/settings", label: "School", icon: Settings },
 ];
 
@@ -70,10 +75,14 @@ const NAV_BY_PERSONA: Record<Persona, NavItem[]> = {
     { to: "/app/finance", label: "Fees & payments", icon: Wallet },
     { to: "/app/students", label: "Students", icon: GraduationCap },
     { to: "/app/announcements", label: "Notices", icon: Megaphone },
+  { to: "/app/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/app/documents", label: "Documents", icon: BookOpen },
+  { to: "/app/admissions", label: "Admissions", icon: GraduationCap },
   ],
   parent: [],
   platform: [
     { to: "/app/platform", label: "Platform", icon: Building2 },
+    { to: "/app/invoices", label: "Invoices", icon: Wallet },
     { to: "/app", label: "Sunrise ops", icon: LayoutDashboard },
   ],
 };
@@ -249,6 +258,9 @@ function ParentChrome() {
     { to: "/app/attendance", label: "Attend.", icon: CalendarDays },
     { to: "/app/finance", label: "Fees", icon: Wallet },
     { to: "/app/announcements", label: "Notices", icon: Megaphone },
+  { to: "/app/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/app/documents", label: "Documents", icon: BookOpen },
+  { to: "/app/admissions", label: "Admissions", icon: GraduationCap },
   ];
   return (
     <div className="min-h-dvh bg-ink text-foam">

@@ -52,6 +52,8 @@ export async function seedWorkspace(sql: Sql, userId: string) {
       subscription_plan: "Campus",
       activation_fee: 850000,
       student_capacity: 640,
+      parent_app_name: "Sunrise Parent",
+      parent_app_slug: "sunrise",
     },
     {
       id: lakeview,

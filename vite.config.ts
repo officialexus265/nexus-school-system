@@ -18,27 +18,72 @@ function hasGlobbedMigrations(root: string): boolean {
 }
 
 /**
- * Finish PGLite bootstrap during dev-server setup.
- * This is intentionally limited to the Vite dev server.
+ * Warm PGLite after the dev server is listening.
+ * Avoids calling ssrLoadModule during configureServer (Vite environments
+ * may not mark SSR as runnable that early).
+ * First request still boots the DB via ensureDbReady() if this fails.
  */
 function pgliteBootstrapPlugin(): Plugin {
   return {
     name: "app:pglite-bootstrap",
     apply: "serve",
-    async configureServer(server) {
+    configureServer(server) {
       if (!hasGlobbedMigrations(server.config.root)) return;
 
-      try {
-        const mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
-          ensureDbReady?: () => Promise<void>;
-        };
+      const warm = async () => {
+        try {
+          // Prefer environments API when present (Vite 6+)
+          const envs = (
+            server as unknown as {
+              environments?: Record<
+                string,
+                { runner?: { import: (id: string) => Promise<unknown> } }
+              >;
+            }
+          ).environments;
 
-        if (typeof mod.ensureDbReady === "function") {
-          await mod.ensureDbReady();
+          let mod: { ensureDbReady?: () => Promise<void> } | undefined;
+
+          if (envs?.ssr?.runner?.import) {
+            mod = (await envs.ssr.runner.import("/src/lib/db.ts")) as {
+              ensureDbReady?: () => Promise<void>;
+            };
+          } else if (typeof server.ssrLoadModule === "function") {
+            try {
+              mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
+                ensureDbReady?: () => Promise<void>;
+              };
+            } catch (err) {
+              console.warn(
+                "[app] Early DB warm skipped (SSR not ready yet). DB will init on first request.",
+                err instanceof Error ? err.message : err,
+              );
+              return;
+            }
+          } else {
+            return;
+          }
+
+          if (typeof mod?.ensureDbReady === "function") {
+            await mod.ensureDbReady();
+            console.log("[app] PGLite migrations ready");
+          }
+        } catch (err) {
+          console.warn(
+            "[app] DB warm failed (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
         }
-      } catch (err) {
-        console.error("[app] DB bootstrap failed:", err);
-        throw err;
+      };
+
+      // Defer until after server is fully up
+      if (server.httpServer) {
+        server.httpServer.once("listening", () => {
+          void warm();
+        });
+      } else {
+        // Fallback: next tick
+        setTimeout(() => void warm(), 0);
       }
     },
   };
