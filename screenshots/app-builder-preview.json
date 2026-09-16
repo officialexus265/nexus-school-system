@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "NEXUS",
+      "hasCanvas": false,
+      "bodyTextLen": 1409,
+      "bodyTextHash": "c909d719ea9bc5c009d305c17e18a38da55ef566f15eaaad6e15c98428193352",
+      "bodyTextPrefix": "NEXUS MULTI-SCHOOL OPERATING PLATFORM The operating system for s",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "NEXUS",
+      "hasCanvas": false,
+      "bodyTextLen": 1440,
+      "bodyTextHash": "aa343fa6c1b86d5d405b6b84f2db44a5e27f1a84bed32a01c78cb3677f678595",
+      "bodyTextPrefix": "NEXUS Sign in Enter MULTI-SCHOOL OPERATING PLATFORM The operatin",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
