@@ -41,11 +41,21 @@ export function gradeFromScore(score: number): string {
   return "F";
 }
 
-export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
+export function formatDate(
+  value: string | Date | null | undefined,
+): string {
+  if (!value) return "—";
+
+  const iso =
+    value instanceof Date
+      ? value.toISOString()
+      : String(value);
+
   const d = iso.slice(0, 10);
   const [y, m, day] = d.split("-");
+
   if (!y || !m || !day) return iso;
+
   const months = [
     "Jan",
     "Feb",
@@ -60,6 +70,7 @@ export function formatDate(iso: string | null | undefined): string {
     "Nov",
     "Dec",
   ];
+
   return `${Number(day)} ${months[Number(m) - 1]} ${y}`;
 }
 
