@@ -172,9 +172,25 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
             : "Back to sign in"}
         </button>
       ) : (
-        <p className="text-center text-xs text-mist">
-          Platform owner already set. Sign in with your admin email.
-        </p>
+        <div className="space-y-1 pt-1 text-center text-xs text-mist">
+          <p>
+            Do you want a school account? Contact the{" "}
+            <a
+              href="tel:+265980697476"
+              className="font-medium text-foam underline-offset-4 hover:underline"
+            >
+              system owner
+            </a>
+          </p>
+          <p>
+            <a
+              href="tel:+265980697476"
+              className="text-sm font-medium tracking-wide text-foam underline-offset-4 hover:underline"
+            >
+              0980697476
+            </a>
+          </p>
+        </div>
       )}
     </form>
   );
