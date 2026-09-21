@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { StatusPill } from "@/components/status-pill";
@@ -20,11 +19,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
-import { addStudent } from "@/lib/nexus/server";
+import {
+  addStudent,
+  bulkImportParents,
+  bulkImportStudents,
+} from "@/lib/nexus/server";
 import { classById, classLabel, studentAttendance, studentBalance } from "@/lib/nexus/selectors";
 import { money, pct, studentName } from "@/lib/utils";
 import { useNexusSession } from "@/stores/session";
-import { bulkImportParents, bulkImportStudents } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/app/students")({ component: StudentsPage });
 
