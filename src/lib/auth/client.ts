@@ -42,7 +42,20 @@ export async function signIn(
 
 /** Sign out of this app's session, then redirect. */
 export async function signOut(redirectTo = "/"): Promise<void> {
+  try {
+    const { clearOfflineAuthCache } = await import("./use-current-user");
+    clearOfflineAuthCache();
+  } catch {
+    /* */
+  }
+  try {
+    localStorage.removeItem("nexus-auth-user-v1");
+  } catch {
+    /* */
+  }
   const { error } = await authClient.signOut();
-  if (error) throw new Error(error.message ?? "Sign-out failed");
+  if (error && typeof navigator !== "undefined" && navigator.onLine) {
+    throw new Error(error.message ?? "Sign-out failed");
+  }
   window.location.href = redirectTo;
 }

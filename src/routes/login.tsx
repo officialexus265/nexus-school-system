@@ -36,6 +36,12 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setError(
+        "You are offline. Sign-in needs a network connection. If you were already signed in, go back online and open /app.",
+      );
+      return;
+    }
     setPending(true);
     try {
       if (mode === "bootstrap" && canCreateFirstOwner) {
@@ -114,8 +120,16 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
         return;
       }
       window.location.href = "/app";
-    } catch {
-      setError("Something went wrong. Try again.");
+    } catch (err) {
+      const offline = typeof navigator !== "undefined" && !navigator.onLine;
+      const msg = err instanceof Error ? err.message : "";
+      setError(
+        offline
+          ? "You are offline. Connect to the internet to sign in."
+          : msg.includes("Failed to fetch") || msg.toLowerCase().includes("network")
+            ? "Cannot reach the server. Check your connection and try again."
+            : msg || "Something went wrong. Try again.",
+      );
       setPending(false);
     }
   }
@@ -273,9 +287,13 @@ function Login() {
   } | null>(null);
 
   useEffect(() => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setStatus({ canCreateFirstOwner: false });
+      return;
+    }
     void platformBootstrapStatus()
       .then((s) => setStatus({ canCreateFirstOwner: s.canCreateFirstOwner }))
-      .catch(() => setStatus({ canCreateFirstOwner: true }));
+      .catch(() => setStatus({ canCreateFirstOwner: false }));
   }, []);
 
   if (isPending || !status) return <Skeleton className="mx-auto mt-24 h-80 max-w-md" />;

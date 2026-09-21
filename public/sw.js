@@ -1,6 +1,6 @@
-/* NEXUS service worker — shell cache + offline fallback */
-const CACHE = "nexus-shell-v1";
-const SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
+/* NEXUS service worker - shell cache. Auth/API always network-only. */
+const CACHE = "nexus-shell-v2";
+const SHELL = ["/", "/login", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -10,23 +10,27 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
-    ).then(() => self.clients.claim()),
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
   );
 });
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== "GET") return;
-
   const url = new URL(req.url);
-  // Never cache API / auth
-  if (url.pathname.startsWith("/api/") || url.pathname.includes("auth")) {
+
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.includes("/api/auth") ||
+    url.pathname.includes("auth")
+  ) {
     return;
   }
 
-  // Navigations: network first, cache fallback
+  if (req.method !== "GET") return;
+
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req)
@@ -35,64 +39,34 @@ self.addEventListener("fetch", (event) => {
           caches.open(CACHE).then((c) => c.put(req, copy));
           return res;
         })
-        .catch(() =>
-          caches.match(req).then((r) => r || caches.match("/") || new Response("Offline", { status: 503 })),
-        ),
+        .catch(async () => {
+          const hit =
+            (await caches.match(req)) ||
+            (await caches.match("/login")) ||
+            (await caches.match("/")) ||
+            null;
+          if (hit) return hit;
+          return new Response(
+            "<!doctype html><html><body style='font-family:system-ui;padding:2rem'><h1>Offline</h1><p>Connect to the internet to load NEXUS. If you were signed in, reconnect and open /app.</p></body></html>",
+            { status: 503, headers: { "Content-Type": "text/html" } },
+          );
+        }),
     );
     return;
   }
 
-  // Static: cache first
   event.respondWith(
-    caches.match(req).then(
-      (hit) =>
-        hit ||
-        fetch(req)
-          .then((res) => {
-            if (res.ok && (url.origin === self.location.origin)) {
-              const copy = res.clone();
-              caches.open(CACHE).then((c) => c.put(req, copy));
-            }
-            return res;
-          })
-          .catch(() => hit),
-    ),
-  );
-});
-
-self.addEventListener("push", (event) => {
-  let data = { title: "NEXUS", body: "You have a new update", url: "/app" };
-  try {
-    if (event.data) data = { ...data, ...event.data.json() };
-  } catch {
-    try {
-      data.body = event.data.text();
-    } catch {
-      /* */
-    }
-  }
-  event.waitUntil(
-    self.registration.showNotification(data.title || "NEXUS", {
-      body: data.body,
-      icon: "/favicon.svg",
-      badge: "/favicon.svg",
-      data: { url: data.url || "/app" },
-    }),
-  );
-});
-
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  const url = event.notification.data?.url || "/app";
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const c of clients) {
-        if ("focus" in c) {
-          c.navigate(url);
-          return c.focus();
-        }
-      }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
+    caches.match(req).then((hit) => {
+      if (hit) return hit;
+      return fetch(req)
+        .then((res) => {
+          if (res.ok && url.origin === self.location.origin) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => hit);
     }),
   );
 });
