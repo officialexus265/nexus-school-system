@@ -1,6 +1,10 @@
 /**
- * Client helpers for FCM / notification permission.
- * When Firebase web config is present, dynamically loads firebase messaging.
+ * Client helpers for push notification permission.
+ *
+ * Firebase Messaging is OPTIONAL. We intentionally do not import `firebase/*`
+ * here so production builds succeed without the firebase package.
+ * When you are ready for FCM: `npm i firebase` and extend this file (or a
+ * separate fcm.ts that is only loaded from Settings when configured).
  */
 
 export function firebaseWebConfigured(): boolean {
@@ -21,34 +25,20 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
 }
 
 /**
- * Returns an FCM token when Firebase is configured; otherwise null.
- * Install `firebase` package and set VITE_FIREBASE_* to enable.
+ * Web push token. Returns null until Firebase is installed and wired.
+ * Browser notification permission still works for local UX messaging.
  */
 export async function getFcmToken(): Promise<string | null> {
   if (!firebaseWebConfigured()) return null;
   const perm = await requestNotificationPermission();
   if (perm !== "granted") return null;
 
-  try {
-    const { initializeApp, getApps } = await import("firebase/app");
-    const { getMessaging, getToken, isSupported } = await import("firebase/messaging");
-    if (!(await isSupported())) return null;
-
-    const config = {
-      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-      appId: import.meta.env.VITE_FIREBASE_APP_ID,
-    };
-    const app = getApps().length ? getApps()[0]! : initializeApp(config);
-    const messaging = getMessaging(app);
-    const token = await getToken(messaging, {
-      vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
-    });
-    return token || null;
-  } catch (e) {
-    console.warn("[nexus] FCM token failed", e);
-    return null;
-  }
+  // Avoid static/dynamic import of `firebase/*` (breaks Vite/Rolldown when
+  // the package is not installed). Enable FCM by adding firebase and a
+  // dedicated loader module later.
+  console.info(
+    "[nexus] FCM env is set but the firebase SDK is not bundled. " +
+      "SMS + in-app notifications remain available. Run: npm i firebase",
+  );
+  return null;
 }

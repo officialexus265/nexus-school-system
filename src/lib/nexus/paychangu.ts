@@ -173,14 +173,19 @@ export async function verifyWebhookSignature(
 ): Promise<boolean> {
   if (!signatureHeader) return false;
   const secret = paychanguWebhookSecret();
-  const crypto = await import("node:crypto");
-  const computed = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  // Prefer Node crypto; fall back to simple compare if unavailable
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(computed),
-      Buffer.from(signatureHeader),
-    );
+    const crypto = await import("crypto");
+    const computed = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(computed),
+        Buffer.from(signatureHeader),
+      );
+    } catch {
+      return computed === signatureHeader;
+    }
   } catch {
-    return computed === signatureHeader;
+    return false;
   }
 }
