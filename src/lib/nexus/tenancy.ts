@@ -65,7 +65,7 @@ export async function accessibleSchoolIds(userId: string): Promise<{
 
   // Legacy: schools still owned via user_id column
   const legacy = await sql<{ id: string }>`
-    select id from schools where user_id = ${userId}
+    select id from schools where user_id = ${userId} or owner_user_id = ${userId}
   `;
   const set = new Set([...fromMembership, ...legacy.map((s) => s.id)]);
   return { platform: false, schoolIds: [...set] };
@@ -84,7 +84,10 @@ export async function requireSchoolAccess(
 
   const sql = await getSql();
   const legacy = await sql<{ id: string }>`
-    select id from schools where id = ${schoolId} and user_id = ${userId} limit 1
+    select id from schools
+    where id = ${schoolId}
+      and (user_id = ${userId} or owner_user_id = ${userId})
+    limit 1
   `;
   if (legacy[0]) return { platform: false, membership: null };
 
@@ -100,7 +103,6 @@ export async function getPermissionCodes(
   if (platform) return ["*"]; // all
 
   const role = membership?.role || "owner";
-  // Owners get full school permissions
   if (role === "owner") {
     return [
       "school.settings.manage",
@@ -123,7 +125,21 @@ export async function getPermissionCodes(
     ];
   }
 
-  // Role-based defaults
+  // Custom role from role_permissions
+  if (membership?.role_id) {
+    try {
+      const sql = await getSql();
+      const codes = await sql<{ code: string }>`
+        select p.code from role_permissions rp
+        inner join permissions p on p.id = rp.permission_id
+        where rp.role_id = ${membership.role_id}
+      `;
+      if (codes.length) return codes.map((c) => c.code);
+    } catch {
+      /* fall through to defaults */
+    }
+  }
+
   const defaults: Record<string, string[]> = {
     head: [
       "students.view",

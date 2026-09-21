@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import { markAttendance } from "@/lib/nexus/server";
+import { enqueueOffline, isBrowserOffline } from "@/lib/offline/queue";
 import {
   attendanceRate,
   classById,
@@ -82,13 +83,35 @@ function AttendancePage() {
   const roster = snap.students.filter((s) => s.class_id === classId);
 
   async function setStatus(student: Student, status: AttendanceStatus) {
-    try {
-      await markAttendance({
-        data: { studentId: student.id, date, status, classId: student.class_id ?? undefined },
+    const payload = {
+      studentId: student.id,
+      date,
+      status,
+      classId: student.class_id ?? undefined,
+    };
+    if (isBrowserOffline()) {
+      enqueueOffline({
+        action: "markAttendance",
+        payload,
+        label: `Attendance ${nameOf(student)} → ${status}`,
       });
+      toast.message("Offline — attendance queued. It will sync when you are back online.");
+      return;
+    }
+    try {
+      await markAttendance({ data: payload });
       toast.success(`${nameOf(student)} · ${status.toLowerCase()}`);
       await invalidate();
     } catch (e) {
+      if (isBrowserOffline()) {
+        enqueueOffline({
+          action: "markAttendance",
+          payload,
+          label: `Attendance ${nameOf(student)} → ${status}`,
+        });
+        toast.message("Saved to offline queue");
+        return;
+      }
       toast.error(e instanceof Error ? e.message : "Could not save");
     }
   }
@@ -98,7 +121,7 @@ function AttendancePage() {
       <PageHeader
         kicker="Register"
         title={`${classLabel(classById(snap, classId))} · today`}
-        description="15 September 2026. Changing a mark writes the register immediately."
+        description="Changing a mark writes the register immediately. Offline marks are queued on this device."
       />
       <div className="space-y-2">
         {roster.map((s) => {

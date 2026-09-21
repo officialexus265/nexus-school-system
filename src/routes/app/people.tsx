@@ -11,7 +11,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import {
+  assignMemberRole,
+  inviteStaffMember,
   listParentVerificationRequests,
+  listSchoolRoles,
   registerSmsParent,
   reviewParentVerification,
 } from "@/lib/nexus/server";
@@ -51,14 +54,13 @@ function PeoplePage() {
     }
   }
 
+  useEffect(() => {
+    if (q.data?.school?.id) void loadVerifications(q.data.school.id);
+  }, [q.data?.school?.id]);
 
   if (q.isPending) return <Skeleton className="h-64" />;
   if (!q.data) return null;
   const snap = q.data;
-
-  useEffect(() => {
-    if (snap?.school?.id) void loadVerifications(snap.school.id);
-  }, [snap?.school?.id]);
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
@@ -205,6 +207,7 @@ function PeoplePage() {
           <TabsTrigger value="parents">Parents</TabsTrigger>
         </TabsList>
         <TabsContent value="staff">
+          <StaffInvite schoolId={snap.school.id} onDone={() => void invalidate()} />
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {snap.staff.map((s) => {
               const taught = snap.assignments.filter((a) => a.staff_id === s.id);
@@ -350,5 +353,110 @@ function PeoplePage() {
       )}
       </Tabs>
     </div>
+  );
+}
+
+
+function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [roleName, setRoleName] = useState("teacher");
+  const [roleId, setRoleId] = useState("");
+  const [roles, setRoles] = useState<{ id: string; name: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+
+  useEffect(() => {
+    void listSchoolRoles({ data: { schoolId } })
+      .then((r) => setRoles(r.roles.map((x) => ({ id: x.id, name: x.name }))))
+      .catch(() => {});
+  }, [schoolId]);
+
+  return (
+    <section className="mb-4 rounded-xl bg-card p-4 shadow-[var(--shadow-border)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-lg">Invite staff</h2>
+        <Button size="sm" variant="outline" onClick={() => setOpen((v) => !v)}>
+          {open ? "Close" : "Invite by email"}
+        </Button>
+      </div>
+      {open && (
+        <form
+          className="mt-3 grid gap-3 sm:grid-cols-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setLink(null);
+            try {
+              const r = await inviteStaffMember({
+                data: {
+                  schoolId,
+                  fullName,
+                  email,
+                  roleName: roleId ? roles.find((x) => x.id === roleId)?.name || roleName : roleName,
+                  roleId: roleId || undefined,
+                },
+              });
+              setLink(r.inviteLink);
+              toast.success(r.emailSent ? "Invite email sent" : "Invite created — copy link");
+              setFullName("");
+              setEmail("");
+              onDone();
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Failed");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <div className="space-y-1">
+            <Label>Full name</Label>
+            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+          </div>
+          <div className="space-y-1">
+            <Label>Email</Label>
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div className="space-y-1">
+            <Label>Role name</Label>
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={roleName}
+              onChange={(e) => setRoleName(e.target.value)}
+            >
+              <option value="teacher">Teacher</option>
+              <option value="bursar">Bursar</option>
+              <option value="exam">Exam officer</option>
+              <option value="head">Head teacher</option>
+              <option value="owner">Owner</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label>Custom role (optional)</Label>
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={roleId}
+              onChange={(e) => setRoleId(e.target.value)}
+            >
+              <option value="">— none —</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button type="submit" disabled={busy} className="sm:col-span-2">
+            {busy ? "Sending…" : "Send staff invite"}
+          </Button>
+          {link && (
+            <p className="sm:col-span-2 break-all text-xs text-muted-foreground">
+              Invite link: {link}
+            </p>
+          )}
+        </form>
+      )}
+    </section>
   );
 }

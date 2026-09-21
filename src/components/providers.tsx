@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
+import { OfflineBanner } from "@/components/offline-banner";
+import { RegisterServiceWorker } from "@/components/register-sw";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [client] = useState(
@@ -15,6 +17,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={client}>
       <TooltipProvider delayDuration={200}>
+        <RegisterServiceWorker />
+        <OfflineBanner />
         {children}
         <Toaster
           position="bottom-right"

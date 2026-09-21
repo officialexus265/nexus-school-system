@@ -11,10 +11,21 @@ import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import {
   getSchoolSmsSettings,
   publishParentApp,
+  registerDeviceToken,
   saveSchoolSmsSettings,
+  sendSchoolPush,
   updateSchool,
   updateSchoolBillingPrefs,
+  beginTotpSetup,
+  confirmTotpSetup,
+  disableTotp,
+  getTotpStatus,
 } from "@/lib/nexus/server";
+import {
+  firebaseWebConfigured,
+  getFcmToken,
+  requestNotificationPermission,
+} from "@/lib/push/client";
 
 export const Route = createFileRoute("/app/settings")({ component: SettingsPage });
 
@@ -27,6 +38,18 @@ function SettingsPage() {
   const [phone, setPhone] = useState(s?.phone ?? "");
   const [email, setEmail] = useState(s?.email ?? "");
   const [busy, setBusy] = useState(false);
+  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [totpSecret, setTotpSecret] = useState<string | null>(null);
+  const [totpUrl, setTotpUrl] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+
+  useEffect(() => {
+    void getTotpStatus()
+      .then((r) => setTotpEnabled(r.enabled))
+      .catch(() => {});
+  }, []);
+
 
   // Parent app branding
   const [appName, setAppName] = useState(s?.parent_app_name ?? "");
@@ -425,6 +448,159 @@ function SettingsPage() {
             Save billing preference
           </Button>
         </section>
+      <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+        <h2 className="font-display text-xl">Push notifications (FCM)</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Optional. With Firebase web config and FCM_SERVER_KEY, parents and staff can receive
+          push alerts. Without keys, the system still works with SMS and in-app messages.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={async () => {
+              try {
+                const perm = await requestNotificationPermission();
+                if (perm !== "granted") {
+                  toast.error("Notification permission not granted");
+                  return;
+                }
+                if (!firebaseWebConfigured()) {
+                  toast.message(
+                    "Browser permission OK. Add VITE_FIREBASE_* and npm i firebase to obtain FCM tokens.",
+                  );
+                  return;
+                }
+                const token = await getFcmToken();
+                if (!token) {
+                  toast.error("Could not get FCM token");
+                  return;
+                }
+                await registerDeviceToken({
+                  data: {
+                    token,
+                    schoolId: s!.id,
+                    label: "staff-web",
+                  },
+                });
+                toast.success("This device registered for push");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed");
+              }
+            }}
+          >
+            Enable push on this device
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={async () => {
+              try {
+                const r = await sendSchoolPush({
+                  data: {
+                    schoolId: s!.id,
+                    title: s!.name,
+                    body: "Test notification from NEXUS",
+                    url: "/app",
+                  },
+                });
+                toast.success(`Push sent ${r.sent}, failed ${r.failed}`);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed");
+              }
+            }}
+          >
+            Send test push
+          </Button>
+        </div>
+      </section>
+      <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+        <h2 className="font-display text-xl">Staff two-factor authentication (2FA)</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Protect this account with an authenticator app (Google Authenticator, Authy, etc.).
+          {totpEnabled ? " 2FA is enabled on your account." : " Recommended for school owners and bursars."}
+        </p>
+        {!totpEnabled && !totpSecret && (
+          <Button
+            className="mt-4"
+            variant="outline"
+            onClick={async () => {
+              try {
+                const r = await beginTotpSetup();
+                setTotpSecret(r.secret);
+                setTotpUrl(r.otpauthUrl);
+                setBackupCodes(r.backupCodes);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed");
+              }
+            }}
+          >
+            Set up 2FA
+          </Button>
+        )}
+        {totpSecret && (
+          <div className="mt-4 space-y-3 text-sm">
+            <p>
+              Secret: <code className="rounded bg-muted px-1">{totpSecret}</code>
+            </p>
+            <p className="break-all text-xs text-muted-foreground">{totpUrl}</p>
+            <p>Add this secret in your authenticator app, then enter a 6-digit code:</p>
+            <Input
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value)}
+              placeholder="123456"
+              className="max-w-xs"
+            />
+            <Button
+              onClick={async () => {
+                try {
+                  await confirmTotpSetup({ data: { code: totpCode } });
+                  toast.success("2FA enabled");
+                  setTotpEnabled(true);
+                  setTotpSecret(null);
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Invalid code");
+                }
+              }}
+            >
+              Confirm & enable
+            </Button>
+            {backupCodes.length > 0 && (
+              <div>
+                <p className="font-medium">Backup codes (store offline):</p>
+                <p className="font-mono text-xs">{backupCodes.join(" · ")}</p>
+              </div>
+            )}
+          </div>
+        )}
+        {totpEnabled && (
+          <div className="mt-4 flex flex-wrap items-end gap-2">
+            <Input
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value)}
+              placeholder="Code to disable"
+              className="max-w-xs"
+            />
+            <Button
+              variant="outline"
+              className="text-red-600"
+              onClick={async () => {
+                try {
+                  await disableTotp({ data: { code: totpCode } });
+                  toast.success("2FA disabled");
+                  setTotpEnabled(false);
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                }
+              }}
+            >
+              Disable 2FA
+            </Button>
+          </div>
+        )}
+      </section>
+
+
       </div>
     </div>
   );

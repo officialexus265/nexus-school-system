@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { PageHeader, StatCard } from "@/components/page-header";
 import { ParentHome } from "@/components/parent/parent-home";
 import { StatusPill } from "@/components/status-pill";
@@ -38,8 +38,11 @@ function AppHome() {
     );
   }
   const snap = q.data;
+  if (snap.isPlatformOwner) {
+    return <Navigate to="/app/platform" />;
+  }
   if (persona === "parent") return <ParentHome snap={snap} />;
-  if (persona === "platform") {
+  if (false && persona === "platform") {
     return (
       <div>
         <PageHeader

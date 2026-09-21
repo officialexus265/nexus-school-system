@@ -21,6 +21,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
 import { useSnapshot } from "@/hooks/use-snapshot";
+import { useNexusSession } from "@/stores/session";
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 
@@ -30,6 +31,7 @@ type NavItem = { to: string; label: string; icon: LucideIcon };
 const PLATFORM_NAV: NavItem[] = [
   { to: "/app/platform", label: "Schools", icon: Building2 },
   { to: "/app/invoices", label: "Invoices", icon: Wallet },
+  { to: "/app/health", label: "Health", icon: Shield },
   { to: "/app/tools", label: "Tools", icon: Settings },
 ];
 
@@ -49,6 +51,8 @@ const SCHOOL_NAV: NavItem[] = [
   { to: "/app/admissions", label: "Admissions", icon: GraduationCap },
   { to: "/app/setup", label: "Setup wizard", icon: Settings },
   { to: "/app/tools", label: "Tools", icon: Settings },
+  { to: "/app/roles", label: "Roles", icon: Shield },
+  { to: "/app/status", label: "Health", icon: Shield },
   { to: "/app/settings", label: "School", icon: Settings },
 ];
 
@@ -122,6 +126,10 @@ export function AppShell() {
     snap.data?.school?.id && snap.data.school.id !== "none"
       ? snap.data.school.name
       : null;
+  const schoolLocked = Boolean(snap.data?.schoolLocked);
+  const setSchoolSlug = useNexusSession((s) => s.setSchoolSlug);
+  const schools = snap.data?.schools || [];
+
 
   const items = isPlatform ? PLATFORM_NAV : SCHOOL_NAV;
   const sideTitle = isPlatform ? "Platform" : schoolName || "School";
@@ -176,10 +184,28 @@ export function AppShell() {
             <p className="truncate text-xs text-muted-foreground">
               {isPlatform
                 ? "Create and bill schools"
-                : schoolName
-                  ? "School management"
-                  : "Awaiting school assignment"}
+                : schoolLocked
+                  ? "Account suspended — contact system owner"
+                  : schoolName
+                    ? "School management"
+                    : "Awaiting school assignment"}
             </p>
+            {!isPlatform && schools.length > 1 && (
+              <select
+                className="mt-1 max-w-xs rounded border border-border bg-background px-2 py-1 text-xs"
+                value={snap.data?.school?.slug || ""}
+                onChange={(e) => {
+                  setSchoolSlug(e.target.value);
+                  window.location.reload();
+                }}
+              >
+                {schools.map((s) => (
+                  <option key={s.id} value={s.slug}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <Button variant="ghost" size="icon" className="relative" type="button">
@@ -193,6 +219,12 @@ export function AppShell() {
           </div>
         </header>
 
+        {schoolLocked && (
+          <div className="border-b border-red-500/40 bg-red-500/10 px-4 py-2 text-center text-sm text-red-800 dark:text-red-200">
+            This school is suspended. You can view limited data; changes are blocked until the
+            system owner reactivates the account.
+          </div>
+        )}
         <main className="flex-1 overflow-auto p-4 md:p-6">
           <Outlet />
         </main>

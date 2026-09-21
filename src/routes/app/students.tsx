@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -23,6 +24,7 @@ import { addStudent } from "@/lib/nexus/server";
 import { classById, classLabel, studentAttendance, studentBalance } from "@/lib/nexus/selectors";
 import { money, pct, studentName } from "@/lib/utils";
 import { useNexusSession } from "@/stores/session";
+import { bulkImportParents, bulkImportStudents } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/app/students")({ component: StudentsPage });
 
@@ -41,7 +43,7 @@ function StudentsPage() {
         kicker="People"
         title="Students"
         description="Records are archived, not deleted. Historical results and fees remain."
-        actions={persona === "parent" ? null : <EnrollDialog schoolId={snap.school.id} classes={snap.classes} />}
+        actions={persona === "parent" ? null : (<><BulkImport schoolId={snap.school.id} onDone={() => void q.refetch()} /><EnrollDialog schoolId={snap.school.id} classes={snap.classes} /></>)}
       />
       <div className="overflow-x-auto rounded-xl bg-card text-card-foreground shadow-[var(--shadow-border)]">
         <table className="w-full min-w-[640px] text-left text-sm">
@@ -180,5 +182,82 @@ function EnrollDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+function BulkImport({ schoolId, onDone }: { schoolId: string; onDone?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      variant="outline"
+      disabled={busy}
+      onClick={() => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".csv,text/csv";
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          setBusy(true);
+          try {
+            const text = await file.text();
+            const lines = text.split(/\r?\n/).filter(Boolean);
+            if (lines.length < 2) throw new Error("CSV needs header + rows");
+            const header = lines[0].toLowerCase();
+            const cols = header.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+            const rows = lines.slice(1).map((line) => {
+              const parts = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+              const obj: Record<string, string> = {};
+              cols.forEach((c, i) => {
+                obj[c] = parts[i] || "";
+              });
+              return obj;
+            });
+            if (cols.includes("admission_number") || cols.includes("first_name")) {
+              const r = await bulkImportStudents({
+                data: {
+                  schoolId,
+                  rows: rows.map((o) => ({
+                    admission_number: o.admission_number || o.admission || "",
+                    first_name: o.first_name || o.firstname || "",
+                    last_name: o.last_name || o.lastname || "",
+                    gender: o.gender,
+                    class_name: o.class_name || o.class,
+                    phone: o.phone,
+                  })),
+                },
+              });
+              toast.success(`Students: ${r.created} created, ${r.skipped} skipped`);
+            } else if (cols.includes("phone") && (cols.includes("full_name") || cols.includes("name"))) {
+              const r = await bulkImportParents({
+                data: {
+                  schoolId,
+                  rows: rows.map((o) => ({
+                    full_name: o.full_name || o.name || "",
+                    phone: o.phone || "",
+                    student_admission: o.student_admission || o.admission_number,
+                    relationship: o.relationship,
+                  })),
+                },
+              });
+              toast.success(`Parents: ${r.created} created, ${r.linked} linked`);
+            } else {
+              throw new Error(
+                "CSV headers: admission_number,first_name,last_name[,gender,class_name,phone] or full_name,phone[,student_admission]",
+              );
+            }
+            onDone?.();
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Import failed");
+          } finally {
+            setBusy(false);
+          }
+        };
+        input.click();
+      }}
+    >
+      {busy ? "Importing…" : "Import CSV"}
+    </Button>
   );
 }

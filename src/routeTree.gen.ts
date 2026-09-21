@@ -29,11 +29,15 @@ import { Route as AppSetupRouteImport } from './routes/app/setup'
 import { Route as AppInvoicesRouteImport } from './routes/app/invoices'
 import { Route as AppAdmissionsRouteImport } from './routes/app/admissions'
 import { Route as AppToolsRouteImport } from './routes/app/tools'
+import { Route as AppRolesRouteImport } from './routes/app/roles'
 import { Route as AppDocumentsRouteImport } from './routes/app/documents'
 import { Route as AppCalendarRouteImport } from './routes/app/calendar'
 import { Route as AppStudentsRouteImport } from './routes/app/students'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiPaychanguWebhookRouteImport } from './routes/api/paychangu/webhook'
+import { Route as ApiCronRouteImport } from './routes/api/cron'
+import { Route as AppHealthRouteImport } from './routes/app/health'
+import { Route as AppStatusRouteImport } from './routes/app/status'
 import { Route as AppStudentsStudentIdRouteImport } from './routes/app/students.$studentId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -136,6 +140,11 @@ const AppToolsRoute = AppToolsRouteImport.update({
   path: '/tools',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppRolesRoute = AppRolesRouteImport.update({
+  id: '/roles',
+  path: '/roles',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppDocumentsRoute = AppDocumentsRouteImport.update({
   id: '/documents',
   path: '/documents',
@@ -160,6 +169,21 @@ const ApiPaychanguWebhookRoute = ApiPaychanguWebhookRouteImport.update({
   id: '/api/paychangu/webhook',
   path: '/api/paychangu/webhook',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCronRoute = ApiCronRouteImport.update({
+  id: '/api/cron',
+  path: '/api/cron',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppHealthRoute = AppHealthRouteImport.update({
+  id: '/health',
+  path: '/health',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppStatusRoute = AppStatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const AppStudentsStudentIdRoute = AppStudentsStudentIdRouteImport.update({
   id: '/$studentId',
@@ -517,6 +541,8 @@ interface AppRouteRouteChildren {
   AppPlatformRoute: typeof AppPlatformRoute
   AppResultsRoute: typeof AppResultsRoute
   AppSettingsRoute: typeof AppSettingsRoute
+  AppToolsRoute: typeof AppToolsRoute
+  AppRolesRoute: typeof AppRolesRoute
   AppStudentsRoute: typeof AppStudentsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
 }
@@ -531,6 +557,10 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppPlatformRoute: AppPlatformRoute,
   AppResultsRoute: AppResultsRoute,
   AppSettingsRoute: AppSettingsRoute,
+  AppToolsRoute: AppToolsRoute,
+  AppRolesRoute: AppRolesRoute,
+  AppHealthRoute: AppHealthRoute,
+  AppStatusRoute: AppStatusRoute,
   AppSetupRoute: AppSetupRoute,
   AppInvoicesRoute: AppInvoicesRoute,
   AppCalendarRoute: AppCalendarRoute,
@@ -551,6 +581,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApplySlugRoute: ApplySlugRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPaychanguWebhookRoute: ApiPaychanguWebhookRoute,
+  ApiCronRoute: ApiCronRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

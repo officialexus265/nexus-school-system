@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   bootstrapPlatformOwner,
   platformBootstrapStatus,
+  checkUserRequires2fa,
+  verifyTotpLogin,
 } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/login")({ component: Login });
@@ -23,6 +25,9 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [totpStep, setTotpStep] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
+
 
   useEffect(() => {
     if (!canCreateFirstOwner && mode === "bootstrap") setMode("sign-in");
@@ -96,11 +101,76 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
           /* ignore */
         }
       }
+      try {
+        const need = await checkUserRequires2fa({ data: { email } });
+        if (need.required) {
+          setTotpStep(true);
+          setPending(false);
+          return;
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "2FA check failed");
+        setPending(false);
+        return;
+      }
       window.location.href = "/app";
     } catch {
       setError("Something went wrong. Try again.");
       setPending(false);
     }
+  }
+
+  async function submitTotp(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setPending(true);
+    try {
+      await verifyTotpLogin({ data: { code: totpCode } });
+      window.location.href = "/app";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid code");
+      setPending(false);
+    }
+  }
+
+  if (totpStep) {
+    return (
+      <form onSubmit={submitTotp} className="space-y-3">
+        <p className="text-sm text-mist">
+          Enter the 6-digit code from your authenticator app (or a backup code).
+        </p>
+        <div className="space-y-1.5">
+          <Label htmlFor="totp" className="text-mist">
+            Authentication code
+          </Label>
+          <Input
+            id="totp"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={totpCode}
+            onChange={(e) => setTotpCode(e.target.value)}
+            required
+            className="border-white/10 bg-ink-3 text-center text-lg tracking-[0.3em] text-foam"
+            placeholder="000000"
+          />
+        </div>
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <Button type="submit" disabled={pending} className="h-11 w-full bg-foam text-ink hover:bg-foam/90">
+          {pending ? "Verifying…" : "Verify and continue"}
+        </Button>
+        <button
+          type="button"
+          className="w-full text-center text-xs text-mist underline-offset-4 hover:underline"
+          onClick={() => {
+            setTotpStep(false);
+            setTotpCode("");
+            setError(null);
+          }}
+        >
+          Back
+        </button>
+      </form>
+    );
   }
 
   return (

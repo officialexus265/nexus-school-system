@@ -14,6 +14,7 @@ import {
   transitionSchoolStatus,
   wipeAllSchools,
   bootstrapPlatformOwner,
+  resendSchoolInvite,
 } from "@/lib/nexus/server";
 import { money } from "@/lib/utils";
 
@@ -322,6 +323,23 @@ function PlatformPage() {
                         }}
                       >
                         Suspend
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            const r = await resendSchoolInvite({ data: { schoolId: s.id } });
+                            toast.success(
+                              r.emailSent ? "Invite resent by email" : "Invite link renewed",
+                            );
+                            if (r.inviteLink) console.log(r.inviteLink);
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : "Failed");
+                          }
+                        }}
+                      >
+                        Resend invite
                       </Button>
                       <Button
                         size="sm"

@@ -7,25 +7,29 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   completeSchoolOwnerSetup,
+  completeStaffInvite,
   getInviteByToken,
+  getStaffInvite,
   linkOwnerMembership,
 } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/set-password")({
   validateSearch: (search: Record<string, unknown>) => ({
     token: typeof search.token === "string" ? search.token : "",
+    staff_token: typeof search.staff_token === "string" ? search.staff_token : "",
   }),
   component: SetPasswordPage,
 });
 
 function SetPasswordPage() {
-  const { token } = Route.useSearch();
+  const { token, staff_token } = Route.useSearch();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [invite, setInvite] = useState<{
     schoolName: string;
     ownerName: string | null;
     ownerEmail: string | null;
+    isStaff?: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
@@ -34,6 +38,23 @@ function SetPasswordPage() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
+    if (staff_token) {
+      getStaffInvite({ data: { token: staff_token } })
+        .then((info) => {
+          setInvite({
+            schoolName: info.schoolName,
+            ownerName: info.fullName,
+            ownerEmail: info.email,
+            isStaff: true,
+          });
+          setLoading(false);
+        })
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : "Invalid staff invite");
+          setLoading(false);
+        });
+      return;
+    }
     if (!token) {
       setError("Missing invite token. Open the link from your invitation email.");
       setLoading(false);
@@ -52,7 +73,7 @@ function SetPasswordPage() {
         setError(e instanceof Error ? e.message : "Invalid invite link");
         setLoading(false);
       });
-  }, [token]);
+  }, [token, staff_token]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -72,6 +93,33 @@ function SetPasswordPage() {
 
     setPending(true);
     try {
+      if (staff_token && invite?.ownerEmail) {
+        const { error: signUpError } = await authClient.signUp.email({
+          email: invite.ownerEmail,
+          password,
+          name: invite.ownerName || invite.schoolName,
+          callbackURL: "/app",
+        });
+        if (signUpError) {
+          const { error: signInError } = await authClient.signIn.email({
+            email: invite.ownerEmail,
+            password,
+            callbackURL: "/app",
+          });
+          if (signInError) {
+            setError(signInError.message || "Could not create account");
+            setPending(false);
+            return;
+          }
+        }
+        await completeStaffInvite({ data: { token: staff_token } });
+        setDone(true);
+        setTimeout(() => {
+          window.location.href = "/app";
+        }, 1000);
+        return;
+      }
+
       // 1. Mark invite as used on the server
       const result = await completeSchoolOwnerSetup({
         data: {
