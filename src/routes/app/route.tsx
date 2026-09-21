@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/app-shell";
 import { RedirectToSignIn } from "@/lib/auth/gates";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { readCachedUser, useCurrentUserState } from "@/lib/auth/use-current-user";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/app")({
@@ -10,7 +10,13 @@ export const Route = createFileRoute("/app")({
 
 function AppLayout() {
   const { user, isPending } = useCurrentUserState();
-  if (isPending) {
+  const offline =
+    typeof navigator !== "undefined" && navigator.onLine === false;
+  const cached =
+    typeof window !== "undefined" ? readCachedUser() : null;
+  const effective = user || (offline ? cached : null);
+
+  if (isPending && !effective) {
     return (
       <div className="min-h-dvh bg-background p-6">
         <Skeleton className="h-10 w-48" />
@@ -23,6 +29,6 @@ function AppLayout() {
       </div>
     );
   }
-  if (!user) return <RedirectToSignIn />;
+  if (!effective) return <RedirectToSignIn />;
   return <AppShell />;
 }

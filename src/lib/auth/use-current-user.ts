@@ -7,7 +7,6 @@ export type AppUser = {
   displayName: string | null;
   primaryEmail: string | null;
   profileImageUrl: string | null;
-  /** True when this is the sandbox/dev fallback (auth not configured). */
   isDevFallback: boolean;
 };
 
@@ -26,7 +25,7 @@ export type CurrentUserState = {
 
 const CACHE_KEY = "nexus-auth-user-v1";
 
-function readCachedUser(): AppUser | null {
+export function readCachedUser(): AppUser | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
@@ -38,15 +37,24 @@ function readCachedUser(): AppUser | null {
   }
 }
 
-function writeCachedUser(user: AppUser | null) {
+export function writeCachedUser(user: AppUser | null) {
   try {
     if (!user || user.isDevFallback) {
       localStorage.removeItem(CACHE_KEY);
       return;
     }
-    localStorage.setItem(CACHE_KEY, JSON.stringify(user));
+    localStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({
+        id: user.id,
+        displayName: user.displayName,
+        primaryEmail: user.primaryEmail,
+        profileImageUrl: user.profileImageUrl,
+        isDevFallback: false,
+      }),
+    );
   } catch {
-    /* private mode / quota */
+    /* private mode */
   }
 }
 
@@ -55,34 +63,35 @@ function isOffline(): boolean {
 }
 
 /**
- * Current user + loading state.
- * When offline, keeps the last successful session from localStorage so a refresh
- * does not force a “logged out” state (login still requires network).
+ * Session + offline cache.
+ * Cache is only cleared on explicit sign-out (or confirmed online session=null).
+ * Network blips must NOT wipe the cache or users get bounced to /login offline.
  */
 export function useCurrentUserState(): CurrentUserState {
   if (!authEnabled) return { user: DEV_USER, isPending: false };
 
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const session = authClient.useSession();
   const data = session.data;
-  const isPending = session.isPending;
+  const isPending = Boolean(session.isPending);
+  const isError = Boolean((session as { isError?: boolean }).isError);
   const error = (session as { error?: unknown }).error;
+
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const [cached, setCached] = useState<AppUser | null>(() =>
     typeof window !== "undefined" ? readCachedUser() : null,
   );
 
-  const sessionUser = data?.user
+  const sessionUser: AppUser | null = data?.user
     ? {
         id: data.user.id,
         displayName: data.user.name ?? null,
         primaryEmail: data.user.email ?? null,
         profileImageUrl: data.user.image ?? null,
-        isDevFallback: false as const,
+        isDevFallback: false,
       }
     : null;
 
-  // Persist successful sessions for offline hard-refresh
   // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     if (sessionUser) {
@@ -91,35 +100,52 @@ export function useCurrentUserState(): CurrentUserState {
     }
   }, [sessionUser?.id, sessionUser?.primaryEmail, sessionUser?.displayName]);
 
-  // Signed out online → clear cache
+  // Confirmed signed-out while online (successful empty session, no error)
   // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
-    if (!isPending && !sessionUser && !isOffline()) {
-      writeCachedUser(null);
-      setCached(null);
+    if (isPending) return;
+    if (sessionUser) return;
+    if (isOffline()) return;
+    if (isError || error) return; // keep cache on network/API failure
+    // Only clear when we got a clean "no session" while online
+    // (Better Auth returned successfully with no user)
+    if (data === null || data === undefined) {
+      // data undefined while error-prone; only clear if status is success-like
+      const status = (session as { status?: string }).status;
+      if (status === "success" || data === null) {
+        // soft: do not clear on undefined
+        if (data === null) {
+          writeCachedUser(null);
+          setCached(null);
+        }
+      }
     }
-  }, [isPending, sessionUser]);
+  }, [isPending, sessionUser, data, isError, error]);
 
   if (sessionUser) {
     return { user: sessionUser, isPending: false };
   }
 
-  // Offline (or session fetch failed while offline): use cache
-  if (isOffline() || (error && isOffline())) {
-    const offlineUser = cached || readCachedUser();
-    if (offlineUser) {
-      return { user: offlineUser, isPending: false };
-    }
+  const offlineUser = cached || (typeof window !== "undefined" ? readCachedUser() : null);
+
+  // Prefer cache when offline, pending, or session request failed
+  if (offlineUser && (isOffline() || isPending || isError || error)) {
+    return { user: offlineUser, isPending: false };
   }
 
-  // Still loading session online
+  // Still resolving online with no cache yet
   if (isPending) {
-    // Brief offline flash on reload: prefer cache so we don't redirect to login
-    if (isOffline()) {
-      const offlineUser = cached || readCachedUser();
-      if (offlineUser) return { user: offlineUser, isPending: false };
-    }
-    return { user: null, isPending: true };
+    return { user: offlineUser, isPending: !offlineUser };
+  }
+
+  // Online, session resolved empty, no usable cache
+  if (!isOffline() && !isError && !error && data === null) {
+    return { user: null, isPending: false };
+  }
+
+  // Ambiguous network: keep cache if any
+  if (offlineUser) {
+    return { user: offlineUser, isPending: false };
   }
 
   return { user: null, isPending: false };
@@ -129,7 +155,6 @@ export function useCurrentUser(): AppUser | null {
   return useCurrentUserState().user;
 }
 
-/** Clear offline auth cache (call after explicit sign-out). */
 export function clearOfflineAuthCache() {
   writeCachedUser(null);
 }

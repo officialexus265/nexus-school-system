@@ -13,6 +13,7 @@ import {
   checkUserRequires2fa,
   verifyTotpLogin,
 } from "@/lib/nexus/server";
+import { readCachedUser, writeCachedUser } from "@/lib/auth/use-current-user";
 
 export const Route = createFileRoute("/login")({ component: Login });
 
@@ -86,6 +87,13 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
           return;
         }
 
+        writeCachedUser({
+          id: "pending-session",
+          displayName: name || email.split("@")[0] || "Owner",
+          primaryEmail: email,
+          profileImageUrl: null,
+          isDevFallback: false,
+        });
         window.location.href = "/app/platform";
         return;
       }
@@ -119,6 +127,14 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
         setPending(false);
         return;
       }
+      // Ensure offline restore has an identity even if get-session fails later
+      writeCachedUser({
+        id: "pending-session",
+        displayName: email.split("@")[0] || "User",
+        primaryEmail: email,
+        profileImageUrl: null,
+        isDevFallback: false,
+      });
       window.location.href = "/app";
     } catch (err) {
       const offline = typeof navigator !== "undefined" && !navigator.onLine;
@@ -140,6 +156,14 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
     setPending(true);
     try {
       await verifyTotpLogin({ data: { code: totpCode } });
+      // Ensure offline restore has an identity even if get-session fails later
+      writeCachedUser({
+        id: "pending-session",
+        displayName: email.split("@")[0] || "User",
+        primaryEmail: email,
+        profileImageUrl: null,
+        isDevFallback: false,
+      });
       window.location.href = "/app";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid code");
