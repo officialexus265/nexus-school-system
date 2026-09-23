@@ -52,12 +52,10 @@ export async function initiateCheckout(
   input: InitiateCheckoutInput,
 ): Promise<InitiateCheckoutResult> {
   if (!paychanguConfigured()) {
-    // Demo mode: return a mock checkout URL
     return {
-      ok: true,
-      checkoutUrl: `${input.returnUrl}?tx_ref=${encodeURIComponent(input.txRef)}&demo=1`,
+      ok: false,
       txRef: input.txRef,
-      status: "demo",
+      error: "PAYCHANGU_SECRET_KEY is not configured. Online payments are unavailable.",
     };
   }
 
@@ -123,7 +121,10 @@ export async function verifyPayment(txRef: string): Promise<{
   error?: string;
 }> {
   if (!paychanguConfigured()) {
-    return { ok: true, status: "success", amount: 0, currency: "MWK", channel: "demo" };
+    return {
+      ok: false,
+      error: "PAYCHANGU_SECRET_KEY is not configured",
+    };
   }
 
   const res = await fetch(

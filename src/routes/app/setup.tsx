@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
@@ -29,34 +29,70 @@ type StepKey =
 const STEPS: { key: StepKey; progressKey: string; title: string; blurb: string }[] = [
   { key: "profile", progressKey: "profile_done", title: "School profile", blurb: "Contact details and motto" },
   { key: "branding", progressKey: "branding_done", title: "Branding", blurb: "Logo mark and colours" },
-  { key: "academics", progressKey: "academics_done", title: "Academics", blurb: "Classes and subjects" },
+  { key: "academics", progressKey: "academics_done", title: "Academics", blurb: "Select classes and subjects" },
   { key: "grading", progressKey: "grading_done", title: "Grading", blurb: "Confirm grading approach" },
   { key: "fees", progressKey: "fees_done", title: "Fees", blurb: "Confirm fee structures exist" },
   { key: "behaviour", progressKey: "behaviour_done", title: "Behaviour", blurb: "Discipline categories ready" },
   { key: "parent_app", progressKey: "parent_app_done", title: "Parent app", blurb: "Publish branded parent portal" },
 ];
 
+/** Malawi-style class catalogue — multi-select, no maximum, at least one required */
+const PRIMARY_CLASSES = [
+  { id: "p1", section: "Primary", name: "Standard 1", label: "Standard / class / grade 1", level: 1 },
+  { id: "p2", section: "Primary", name: "Standard 2", label: "Standard / class / grade 2", level: 2 },
+  { id: "p3", section: "Primary", name: "Standard 3", label: "Standard / class / grade 3", level: 3 },
+  { id: "p4", section: "Primary", name: "Standard 4", label: "Standard / class / grade 4", level: 4 },
+  { id: "p5", section: "Primary", name: "Standard 5", label: "Standard / class / grade 5", level: 5 },
+  { id: "p6", section: "Primary", name: "Standard 6", label: "Standard / class / grade 6", level: 6 },
+  { id: "p7", section: "Primary", name: "Standard 7", label: "Standard / class / grade 7", level: 7 },
+  { id: "p8", section: "Primary", name: "Standard 8", label: "Standard / class / grade 8", level: 8 },
+] as const;
+
+const SECONDARY_CLASSES = [
+  { id: "s1", section: "Secondary", name: "Form 1", label: "Form 1 / grade 9", level: 9 },
+  { id: "s2", section: "Secondary", name: "Form 2", label: "Form 2 / grade 10", level: 10 },
+  { id: "s3", section: "Secondary", name: "Form 3", label: "Form 3 / grade 11", level: 11 },
+  { id: "s4", section: "Secondary", name: "Form 4", label: "Form 4 / grade 12", level: 12 },
+  { id: "s5", section: "Secondary", name: "Form 5", label: "Form 5 / grade 13", level: 13 },
+  { id: "s6", section: "Secondary", name: "Form 6", label: "Form 6 / grade 14", level: 14 },
+] as const;
+
+const ALL_CLASS_OPTIONS = [...PRIMARY_CLASSES, ...SECONDARY_CLASSES];
+
+const DEFAULT_SUBJECTS = [
+  { name: "Mathematics", code: "MATH" },
+  { name: "English", code: "ENG" },
+  { name: "Science", code: "SCI" },
+  { name: "Chichewa", code: "CHI" },
+  { name: "Social Studies", code: "SS" },
+  { name: "Bible Knowledge", code: "BK" },
+  { name: "Agriculture", code: "AGR" },
+  { name: "Life Skills", code: "LS" },
+];
+
 function SetupWizardPage() {
   const q = useSnapshot();
   const invalidate = useInvalidateSnapshot();
+  const navigate = useNavigate();
   const school = q.data?.school;
   const [step, setStep] = useState(0);
   const [progress, setProgress] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
 
-  // Profile
   const [motto, setMotto] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
 
-  // Branding
   const [logoMark, setLogoMark] = useState("");
   const [primaryColor, setPrimaryColor] = useState("#0f766e");
   const [appName, setAppName] = useState("");
 
-  // Academics
-  const [classLines, setClassLines] = useState("Secondary, Form 1, A\nSecondary, Form 2, A\nPrimary, Standard 5");
-  const [subjectLines, setSubjectLines] = useState("Mathematics, MATH\nEnglish, ENG\nScience, SCI");
+  const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([
+    "Mathematics",
+    "English",
+    "Science",
+  ]);
 
   useEffect(() => {
     if (!school) return;
@@ -77,14 +113,25 @@ function SetupWizardPage() {
           behaviour_done: p.behaviour_done,
           parent_app_done: p.parent_app_done,
         });
+        // Jump to first incomplete step
+        const keys = STEPS.map((s) => s.progressKey);
+        const firstIncomplete = keys.findIndex((k) => !p[k as keyof typeof p]);
+        if (firstIncomplete >= 0) setStep(firstIncomplete);
       })
       .catch(() => {});
   }, [school?.id]);
 
   if (q.isPending) return <Skeleton className="h-64" />;
-  if (!school) return null;
+  if (!school || school.id === "none") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No school linked. Platform owners open schools from Platform; school owners use the invite
+        link.
+      </p>
+    );
+  }
 
-  const current = STEPS[step];
+  const current = STEPS[step]!;
 
   async function markDone(progressKey: string) {
     await updateSetupProgress({
@@ -102,6 +149,18 @@ function SetupWizardPage() {
       },
     });
     setProgress((p) => ({ ...p, [progressKey]: true }));
+  }
+
+  function toggleClass(id: string) {
+    setSelectedClassIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  function toggleSubject(name: string) {
+    setSelectedSubjects((prev) =>
+      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name],
+    );
   }
 
   async function handleNext() {
@@ -125,24 +184,30 @@ function SetupWizardPage() {
         await markDone("branding_done");
         toast.success("Branding saved");
       } else if (current.key === "academics") {
-        const classes = classLines
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .map((l) => {
-            const [section, name, stream] = l.split(",").map((x) => x.trim());
-            return { section: section || "General", name: name || section, stream };
-          });
-        const subjects = subjectLines
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .map((l) => {
-            const [name, code, section] = l.split(",").map((x) => x.trim());
-            return { name, code, section };
-          });
+        if (selectedClassIds.length < 1) {
+          toast.error("Select at least one class");
+          setBusy(false);
+          return;
+        }
+        const classes = ALL_CLASS_OPTIONS.filter((c) => selectedClassIds.includes(c.id)).map(
+          (c) => ({
+            section: c.section,
+            name: c.name,
+            stream: undefined as string | undefined,
+            level_order: c.level,
+          }),
+        );
+        const subjects = DEFAULT_SUBJECTS.filter((s) => selectedSubjects.includes(s.name)).map(
+          (s) => ({ name: s.name, code: s.code }),
+        );
+        if (subjects.length < 1) {
+          toast.error("Select at least one subject");
+          setBusy(false);
+          return;
+        }
         await saveWizardAcademics({ data: { schoolId: school.id, classes, subjects } });
-        toast.success("Classes and subjects added");
+        await markDone("academics_done");
+        toast.success(`${classes.length} class(es) and ${subjects.length} subject(s) saved`);
       } else if (current.key === "grading") {
         await markDone("grading_done");
         toast.success("Grading step confirmed");
@@ -162,11 +227,17 @@ function SetupWizardPage() {
           },
         });
         await markDone("parent_app_done");
-        toast.success(`Parent app published: ${pub.installUrl}`);
+        toast.success(`Parent app published: ${pub.installUrl || "/p/" + school.slug}`);
       }
+
       await invalidate();
-      if (step < STEPS.length - 1) setStep((s) => s + 1);
-      else toast.success("Setup complete");
+
+      if (step < STEPS.length - 1) {
+        setStep((s) => s + 1);
+      } else {
+        toast.success("Setup complete — welcome to your school desk");
+        navigate({ to: "/app" });
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
@@ -236,41 +307,121 @@ function SetupWizardPage() {
         {current.key === "branding" && (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Parent app name</Label>
-              <Input value={appName} onChange={(e) => setAppName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Logo mark</Label>
+              <Label>Logo mark (1–3 letters)</Label>
               <Input
                 value={logoMark}
-                maxLength={3}
-                onChange={(e) => setLogoMark(e.target.value.toUpperCase())}
+                onChange={(e) => setLogoMark(e.target.value.slice(0, 3))}
               />
             </div>
             <div className="space-y-1.5">
               <Label>Primary colour</Label>
-              <Input type="color" value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)} />
+              <Input
+                type="color"
+                value={primaryColor}
+                onChange={(e) => setPrimaryColor(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Parent app name</Label>
+              <Input value={appName} onChange={(e) => setAppName(e.target.value)} />
             </div>
           </div>
         )}
 
         {current.key === "academics" && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Classes (one per line: Section, Name, Stream)</Label>
-              <textarea
-                className="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={classLines}
-                onChange={(e) => setClassLines(e.target.value)}
-              />
+          <div className="mt-4 space-y-6">
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <Label>Primary classes (select all that apply)</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setSelectedClassIds((prev) => {
+                      const ids = PRIMARY_CLASSES.map((c) => c.id);
+                      const allOn = ids.every((id) => prev.includes(id));
+                      return allOn
+                        ? prev.filter((id) => !ids.includes(id as typeof ids[number]))
+                        : [...new Set([...prev, ...ids])];
+                    })
+                  }
+                >
+                  Toggle all primary
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {PRIMARY_CLASSES.map((c) => (
+                  <label
+                    key={c.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-secondary/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedClassIds.includes(c.id)}
+                      onChange={() => toggleClass(c.id)}
+                    />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>Subjects (one per line: Name, Code)</Label>
-              <textarea
-                className="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={subjectLines}
-                onChange={(e) => setSubjectLines(e.target.value)}
-              />
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <Label>Secondary classes (select all that apply)</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setSelectedClassIds((prev) => {
+                      const ids = SECONDARY_CLASSES.map((c) => c.id);
+                      const allOn = ids.every((id) => prev.includes(id));
+                      return allOn
+                        ? prev.filter((id) => !ids.includes(id as typeof ids[number]))
+                        : [...new Set([...prev, ...ids])];
+                    })
+                  }
+                >
+                  Toggle all secondary
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {SECONDARY_CLASSES.map((c) => (
+                  <label
+                    key={c.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-secondary/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedClassIds.includes(c.id)}
+                      onChange={() => toggleClass(c.id)}
+                    />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Selected: {selectedClassIds.length} class(es). At least one is required.
+            </p>
+            <div>
+              <Label>Subjects (select at least one)</Label>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {DEFAULT_SUBJECTS.map((s) => (
+                  <label
+                    key={s.code}
+                    className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-secondary/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSubjects.includes(s.name)}
+                      onChange={() => toggleSubject(s.name)}
+                    />
+                    {s.name} ({s.code})
+                  </label>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -302,7 +453,7 @@ function SetupWizardPage() {
               Publishing generates the school-locked parent portal at{" "}
               <code>/p/{school.parent_app_slug || school.slug}</code>.
             </p>
-            <p>Share that link on WhatsApp after this step.</p>
+            <p>After Finish you will leave the wizard and can share that link on WhatsApp.</p>
           </div>
         )}
 
@@ -310,7 +461,7 @@ function SetupWizardPage() {
           <Button variant="outline" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
             Back
           </Button>
-          <Button onClick={handleNext} disabled={busy}>
+          <Button onClick={() => void handleNext()} disabled={busy}>
             {busy ? "Saving…" : step === STEPS.length - 1 ? "Finish" : "Save & continue"}
           </Button>
         </div>

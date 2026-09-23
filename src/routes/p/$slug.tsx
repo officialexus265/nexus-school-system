@@ -35,8 +35,8 @@ function ParentPortalPage() {
   const [data, setData] = useState<PortalData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
+  const [otpChannel, setOtpChannel] = useState<"sms" | "email">("sms");
   const [code, setCode] = useState("");
-  const [demoHint, setDemoHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const [tab, setTab] = useState<"home" | "results" | "attendance" | "fees" | "notices" | "messages">("home");
@@ -138,14 +138,9 @@ function ParentPortalPage() {
   async function handleRequestOtp(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setDemoHint(null);
     setBusy(true);
     try {
-      const res = await requestParentOtp({ data: { slug, phone } });
-      if (res.demoCode) {
-        setDemoHint(`Demo code: ${res.demoCode}`);
-        setCode(res.demoCode);
-      }
+      await requestParentOtp({ data: { slug, phone, channel: otpChannel } });
       setPhase("otp");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send code");
@@ -189,7 +184,6 @@ function ParentPortalPage() {
     setData(null);
     setPhase("login");
     setCode("");
-    setDemoHint(null);
   }
 
   const primary = branding?.primary || "#0f766e";
@@ -246,7 +240,31 @@ function ParentPortalPage() {
                   className="border-white/20 bg-white/10 text-white placeholder:text-white/40"
                 />
                 <p className="text-xs text-white/50">
-                  Use the phone the school registered for you. You will receive an SMS code.
+                  Use the phone the school registered for you.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-white/80">Receive code by</Label>
+                <div className="flex gap-4 text-sm text-white/80">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={otpChannel === "sms"}
+                      onChange={() => setOtpChannel("sms")}
+                    />
+                    SMS
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={otpChannel === "email"}
+                      onChange={() => setOtpChannel("email")}
+                    />
+                    Email
+                  </label>
+                </div>
+                <p className="text-xs text-white/50">
+                  Email only works if the school saved your email on the parent record.
                 </p>
               </div>
               {error && <p className="text-sm text-red-300">{error}</p>}
@@ -293,11 +311,7 @@ function ParentPortalPage() {
               <p className="text-center text-sm text-white/70">
                 Code sent to <span className="font-medium text-white">{phone}</span>
               </p>
-              {demoHint && (
-                <p className="rounded-lg bg-amber-500/20 px-3 py-2 text-center text-sm text-amber-100">
-                  {demoHint}
-                </p>
-              )}
+              
               <div className="space-y-1.5">
                 <Label className="text-white/80">6-digit code</Label>
                 <Input
@@ -326,8 +340,7 @@ function ParentPortalPage() {
                   setPhase("login");
                   setCode("");
                   setError(null);
-                  setDemoHint(null);
-                }}
+                              }}
               >
                 Use a different number
               </button>

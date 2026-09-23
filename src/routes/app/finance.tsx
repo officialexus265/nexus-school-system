@@ -576,8 +576,8 @@ function PayDialog({
                 });
                 if (res.checkoutUrl) {
                   toast.message(
-                    res.demo
-                      ? "Demo mode: no PayChangu key — opening return URL"
+                    false
+                      ? "PayChangu is not configured — online checkout unavailable"
                       : "Redirecting to PayChangu (MoMo / bank / card)…",
                   );
                   window.location.href = res.checkoutUrl;

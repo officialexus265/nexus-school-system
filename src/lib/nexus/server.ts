@@ -1446,7 +1446,7 @@ async function notifyLinkedParents(
 
 /** Request OTP for parent app login. Phone must match a registered parent for this school. */
 export const requestParentOtp = createServerFn({ method: "POST" })
-  .validator((data: { slug: string; phone: string }) => data)
+  .validator((data: { slug: string; phone: string; channel?: "sms" | "email" }) => data)
   .handler(async ({ data }) => {
     const sql = await getSql();
     const slug = data.slug?.trim();
@@ -1493,24 +1493,33 @@ export const requestParentOtp = createServerFn({ method: "POST" })
     );
 
     const msg = `${school.parent_app_name || school.name}: Your login code is ${code}. Valid 10 minutes.`;
-    await logSms(sql, school.id, phone, msg, "OTP");
-
-    // In production never return the code. For local/demo we include it so testing is easy.
-    const isDev =
-      !process.env.DATABASE_URL ||
-      process.env.NODE_ENV !== "production" ||
-      process.env.VITE_AUTH_ENABLED === "false";
+    const channel = data.channel || "sms";
+    const parentEmail = parents[0].email;
+    if (channel === "email") {
+      if (!parentEmail) {
+        throw new Error("No email on file for this parent. Use SMS or ask the school to add an email.");
+      }
+      const { sendEmail } = await import("./email");
+      const er = await sendEmail({
+        to: parentEmail,
+        subject: `${school.parent_app_name || school.name} login code`,
+        text: msg,
+        html: `<p>${msg}</p>`,
+      });
+      if (!er.ok) throw new Error(er.error || "Failed to send email OTP");
+    } else {
+      const smsResult = await logSms(sql, school.id, phone, msg, "OTP");
+      if (!smsResult.ok) {
+        throw new Error(smsResult.error || "Failed to send OTP SMS. Check httpSMS settings.");
+      }
+    }
 
     return {
       ok: true,
       challengeId,
       phone,
       expiresAt: expires.toISOString(),
-      // Demo only:
-      demoCode: isDev ? code : undefined,
-      message: isDev
-        ? `Demo OTP: ${code} (also logged to server console / SMS log)`
-        : "OTP sent by SMS",
+      message: channel === "email" ? "OTP sent by email" : "OTP sent by SMS",
     };
   });
 
@@ -1670,17 +1679,26 @@ export const registerSmsParent = createServerFn({ method: "POST" })
       schoolId: string;
       fullName: string;
       phone: string;
+      email?: string;
       studentIds: string[];
       relationship?: string;
       smsOnly?: boolean;
+      /** How to send the welcome / link code: sms | email | both */
+      notifyChannel?: "sms" | "email" | "both";
     }) => data,
   )
   .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "parents.manage");
     const sql = await getSql();
     const fullName = data.fullName.trim();
     const phoneRaw = data.phone.trim();
+    const email = data.email?.trim().toLowerCase() || null;
     if (!fullName || !phoneRaw) throw new Error("Name and phone are required");
     if (!data.studentIds?.length) throw new Error("Link at least one student");
+    const channel = data.notifyChannel || "sms";
+    if ((channel === "email" || channel === "both") && !email) {
+      throw new Error("Email is required when notify channel includes email");
+    }
 
     const schools = await sql<School>`
       select * from schools where id = ${data.schoolId} limit 1
@@ -1689,17 +1707,19 @@ export const registerSmsParent = createServerFn({ method: "POST" })
 
     const phone = normalizePhone(phoneRaw);
     const parentId = nid(context.userId, `par-${Date.now()}`);
+    const smsOnly = data.smsOnly !== false && channel === "sms";
 
     await sql.query(
       `insert into parents (id, user_id, school_id, full_name, phone, email, verification_status, sms_only)
-       values ($1,$2,$3,$4,$5,null,'VERIFIED',$6)`,
+       values ($1,$2,$3,$4,$5,$6,'VERIFIED',$7)`,
       [
         parentId,
         context.userId,
         data.schoolId,
         fullName,
         phone,
-        data.smsOnly !== false, // default true for this form
+        email,
+        smsOnly,
       ],
     );
 
@@ -1718,13 +1738,32 @@ export const registerSmsParent = createServerFn({ method: "POST" })
       );
     }
 
-    // Welcome SMS
     const schoolName = schools[0].name;
-    const msg = data.smsOnly !== false
-      ? `${schoolName}: You are registered for SMS updates about your child's school. Reply HELP for support.`
-      : `${schoolName}: Parent account created. Install the school app: ${(schools[0].parent_app_slug && `open /p/${schools[0].parent_app_slug}`) || "contact the school"}.`;
+    const base =
+      process.env.BETTER_AUTH_URL ||
+      process.env.VITE_APP_URL ||
+      "http://localhost:8080";
+    const appUrl = schools[0].parent_app_slug
+      ? `${base.replace(/\/$/, "")}/p/${schools[0].parent_app_slug}`
+      : base;
+    const msg = `${schoolName}: You are registered as a parent. Open the school app: ${appUrl}`;
 
-    await logSms(sql, data.schoolId, phone, msg, "PARENT_REGISTERED");
+    let smsSent = false;
+    let emailSent = false;
+    if (channel === "sms" || channel === "both") {
+      await logSms(sql, data.schoolId, phone, msg, "PARENT_REGISTERED");
+      smsSent = true;
+    }
+    if ((channel === "email" || channel === "both") && email) {
+      const { sendEmail } = await import("./email");
+      const er = await sendEmail({
+        to: email,
+        subject: `${schoolName} — parent registration`,
+        text: msg,
+        html: `<p>${msg}</p><p><a href="${appUrl}">Open parent app</a></p>`,
+      });
+      emailSent = er.ok;
+    }
 
     await audit(
       context.userId,
@@ -1733,10 +1772,10 @@ export const registerSmsParent = createServerFn({ method: "POST" })
       "REGISTER_PARENT",
       "parents",
       parentId,
-      `Registered ${fullName} (${phone}) sms_only=${data.smsOnly !== false}`,
+      `Registered ${fullName} (${phone}) channel=${channel}`,
     );
 
-    return { ok: true, parentId, phone };
+    return { ok: true, parentId, phone, email, smsSent, emailSent, appUrl };
   });
 
 /**
@@ -5746,7 +5785,7 @@ export const getPlatformHealth = createServerFn({ method: "POST" })
         id: "pay",
         label: "PayChangu",
         status: envChecks.PAYCHANGU_SECRET_KEY ? "ok" : "warn",
-        detail: envChecks.PAYCHANGU_SECRET_KEY ? "Configured" : "Online pay in demo mode",
+        detail: envChecks.PAYCHANGU_SECRET_KEY ? "Configured" : "Not configured — online pay disabled",
       },
       {
         id: "cron",
@@ -6149,3 +6188,44 @@ export async function assertSchoolNotLocked(userId: string, schoolId: string) {
     );
   }
 }
+
+
+/** Upload image/file via Cloudinary (or register external URL). */
+export const uploadSchoolFile = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      dataBase64?: string;
+      externalUrl?: string;
+      purpose?: string;
+      filename?: string;
+      mimeType?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const { storageProvider, registerExternalUrl, uploadToCloudinary } = await import(
+      "./storage"
+    );
+    if (data.externalUrl?.trim()) {
+      return registerExternalUrl(
+        data.externalUrl.trim(),
+        data.purpose || "file",
+        data.schoolId,
+      );
+    }
+    if (!data.dataBase64) throw new Error("File data or externalUrl required");
+    if (storageProvider() === "cloudinary") {
+      return uploadToCloudinary({
+        dataBase64: data.dataBase64,
+        folder: `nexus/${data.schoolId}/${data.purpose || "uploads"}`,
+        filename: data.filename,
+        mimeType: data.mimeType,
+      });
+    }
+    // local / s3 without binary upload path: reject with clear message
+    throw new Error(
+      "Binary upload requires STORAGE_PROVIDER=cloudinary (or paste an external URL).",
+    );
+  });

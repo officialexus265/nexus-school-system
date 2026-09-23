@@ -29,8 +29,9 @@ function PeoplePage() {
   const [showForm, setShowForm] = useState(false);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [parentEmail, setParentEmail] = useState("");
   const [relationship, setRelationship] = useState("Guardian");
-  const [smsOnly, setSmsOnly] = useState(true);
+  const [notifyChannel, setNotifyChannel] = useState<"sms" | "email" | "both">("sms");
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [verifications, setVerifications] = useState<
@@ -70,23 +71,24 @@ function PeoplePage() {
     }
     setBusy(true);
     try {
-      await registerSmsParent({
+      const r = await registerSmsParent({
         data: {
           schoolId: snap.school.id,
           fullName,
           phone,
+          email: parentEmail || undefined,
           studentIds: selectedStudents,
           relationship,
-          smsOnly,
+          smsOnly: notifyChannel === "sms",
+          notifyChannel,
         },
       });
       toast.success(
-        smsOnly
-          ? "SMS-only parent registered. Welcome SMS queued."
-          : "Parent registered. Welcome SMS queued.",
+        `Parent registered. SMS: ${r.smsSent ? "sent" : "—"} · Email: ${r.emailSent ? "sent" : "—"}`,
       );
       setFullName("");
       setPhone("");
+      setParentEmail("");
       setSelectedStudents([]);
       setShowForm(false);
       await invalidate();
@@ -151,12 +153,37 @@ function PeoplePage() {
                 placeholder="Mother / Father / Guardian"
               />
             </div>
-            <div className="flex items-end">
+            <div className="space-y-1.5">
+              <Label>Email (required for email channel)</Label>
+              <Input
+                type="email"
+                value={parentEmail}
+                onChange={(e) => setParentEmail(e.target.value)}
+                placeholder="parent@example.com"
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Send welcome / app link via</Label>
+              <div className="flex flex-wrap gap-4 text-sm">
+                {(["sms", "email", "both"] as const).map((c) => (
+                  <label key={c} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="notifyChannel"
+                      checked={notifyChannel === c}
+                      onChange={() => setNotifyChannel(c)}
+                    />
+                    {c === "sms" ? "SMS only" : c === "email" ? "Email only" : "SMS + Email"}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="hidden">
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
-                  checked={smsOnly}
-                  onChange={(e) => setSmsOnly(e.target.checked)}
+                  checked={notifyChannel === "sms"}
+                  onChange={() => {}}
                   className="size-4 accent-primary"
                 />
                 SMS-only (no smartphone app)
@@ -451,9 +478,25 @@ function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => voi
             {busy ? "Sending…" : "Send staff invite"}
           </Button>
           {link && (
-            <p className="sm:col-span-2 break-all text-xs text-muted-foreground">
-              Invite link: {link}
-            </p>
+            <div className="sm:col-span-2 space-y-2 rounded-md border border-border bg-secondary/40 p-3">
+              <p className="text-sm font-medium">Invite link (share on WhatsApp if email fails)</p>
+              <p className="break-all text-xs text-muted-foreground">{link}</p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(link);
+                    toast.success("Link copied — paste into WhatsApp");
+                  } catch {
+                    toast.message(link);
+                  }
+                }}
+              >
+                Copy invite link
+              </Button>
+            </div>
           )}
         </form>
       )}

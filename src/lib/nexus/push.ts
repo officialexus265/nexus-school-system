@@ -1,6 +1,6 @@
 /**
  * Push notifications via FCM HTTP legacy API (server key)
- * or no-op demo when FCM_SERVER_KEY is unset.
+ * Returns failure when FCM_SERVER_KEY is unset (no silent success).
  *
  * Client obtains a token with Firebase JS SDK when VITE_FIREBASE_* is set,
  * then registers it via registerDeviceToken.
@@ -20,10 +20,7 @@ export async function sendFcmToToken(
 ): Promise<{ ok: boolean; error?: string }> {
   const key = env("FCM_SERVER_KEY") || env("FIREBASE_SERVER_KEY");
   if (!key) {
-    console.log(
-      `[NEXUS PUSH:demo] → ${token.slice(0, 12)}… ${notification.title}: ${notification.body}`,
-    );
-    return { ok: true };
+    return { ok: false, error: "FCM_SERVER_KEY not configured" };
   }
 
   const res = await fetch("https://fcm.googleapis.com/fcm/send", {
