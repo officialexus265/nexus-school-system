@@ -14,10 +14,19 @@ import {
 } from "@/lib/nexus/server";
 
 export const Route = createFileRoute("/set-password")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    token: typeof search.token === "string" ? search.token : "",
-    staff_token: typeof search.staff_token === "string" ? search.staff_token : "",
-  }),
+  validateSearch: (search: Record<string, unknown>) => {
+    const staff_token =
+      (typeof search.staff_token === "string" && search.staff_token) ||
+      (typeof search.staffToken === "string" && search.staffToken) ||
+      "";
+    const token =
+      staff_token
+        ? ""
+        : typeof search.token === "string"
+          ? search.token
+          : "";
+    return { token, staff_token };
+  },
   component: SetPasswordPage,
 });
 
@@ -30,6 +39,7 @@ function SetPasswordPage() {
     ownerName: string | null;
     ownerEmail: string | null;
     isStaff?: boolean;
+    roleName?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
@@ -46,6 +56,7 @@ function SetPasswordPage() {
             ownerName: info.fullName,
             ownerEmail: info.email,
             isStaff: true,
+            roleName: info.roleName || "teacher",
           });
           setLoading(false);
         })
@@ -178,9 +189,11 @@ function SetPasswordPage() {
           <p className="text-sm text-mist">
             {loading
               ? "Validating invite…"
-              : invite
-                ? `Welcome to NEXUS. You are setting up the owner account for ${invite.schoolName}.`
-                : "Invite validation"}
+              : invite?.isStaff
+                ? `Welcome to NEXUS. You are joining ${invite.schoolName} as ${invite.roleName || "staff"}.`
+                : invite
+                  ? `Welcome to NEXUS. You are setting up the owner account for ${invite.schoolName}.`
+                  : "Invite validation"}
           </p>
         </div>
 
@@ -211,10 +224,26 @@ function SetPasswordPage() {
                 <span className="font-medium">{invite.schoolName}</span>
               </p>
               <p>
-                <span className="text-mist">Owner email</span>
+                <span className="text-mist">
+                  {invite.isStaff ? "Your email" : "Owner email"}
+                </span>
                 <br />
                 <span className="font-medium">{invite.ownerEmail}</span>
               </p>
+              {invite.isStaff && invite.ownerName ? (
+                <p>
+                  <span className="text-mist">Name</span>
+                  <br />
+                  <span className="font-medium">{invite.ownerName}</span>
+                </p>
+              ) : null}
+              {invite.isStaff && invite.roleName ? (
+                <p>
+                  <span className="text-mist">Role</span>
+                  <br />
+                  <span className="font-medium capitalize">{invite.roleName}</span>
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-1.5">

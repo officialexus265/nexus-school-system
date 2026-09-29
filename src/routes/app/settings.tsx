@@ -13,6 +13,8 @@ import {
   getSchoolEmailSettings,
   updateSchoolEmailSettings,
   testSchoolEmailSettings,
+  startSchoolGmailOAuth,
+  disconnectSchoolGmail,
   publishParentApp,
   registerDeviceToken,
   saveSchoolSmsSettings,
@@ -40,7 +42,7 @@ function SettingsPage() {
   const [motto, setMotto] = useState(s?.motto ?? "");
   const [phone, setPhone] = useState(s?.phone ?? "");
   const [email, setEmail] = useState(s?.email ?? "");
-  const [mailMode, setMailMode] = useState<"platform" | "smtp">("platform");
+  const [mailMode, setMailMode] = useState<"platform" | "smtp" | "gmail_oauth">("platform");
   const [mailFromName, setMailFromName] = useState("");
   const [mailFromEmail, setMailFromEmail] = useState("");
   const [mailReplyTo, setMailReplyTo] = useState("");
@@ -50,6 +52,9 @@ function SettingsPage() {
   const [smtpPass, setSmtpPass] = useState("");
   const [smtpSecure, setSmtpSecure] = useState(false);
   const [hasSmtpPass, setHasSmtpPass] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [gmailAddress, setGmailAddress] = useState("");
+
 
   const [busy, setBusy] = useState(false);
   const [totpEnabled, setTotpEnabled] = useState(false);
@@ -62,6 +67,18 @@ function SettingsPage() {
     void getTotpStatus()
       .then((r) => setTotpEnabled(r.enabled))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("gmail") === "connected") {
+      toast.success("Gmail connected — school mail will use this account");
+      window.history.replaceState({}, "", "/app/settings");
+    } else if (sp.get("gmail") === "error") {
+      toast.error(sp.get("msg") || "Gmail connection failed");
+      window.history.replaceState({}, "", "/app/settings");
+    }
   }, []);
 
 
@@ -95,7 +112,7 @@ function SettingsPage() {
     void getSchoolEmailSettings({ data: { schoolId: s.id } })
       .then((r) => {
         const x = r.settings as Record<string, unknown>;
-        setMailMode((x.mode as "platform" | "smtp") || "platform");
+        setMailMode((x.mode as "platform" | "smtp" | "gmail_oauth") || "platform");
         setMailFromName(String(x.from_name || s.name || ""));
         setMailFromEmail(String(x.from_email || s.email || ""));
         setMailReplyTo(String(x.reply_to || s.email || ""));
@@ -104,6 +121,10 @@ function SettingsPage() {
         setSmtpUser(String(x.smtp_user || ""));
         setSmtpSecure(Boolean(x.smtp_secure));
         setHasSmtpPass(Boolean(x.has_smtp_pass));
+        setGmailConnected(Boolean(x.gmail_connected));
+        setGmailAddress(String(x.gmail_address || ""));
+
+
       })
       .catch(() => {});
     setMotto(s.motto ?? "");
@@ -258,11 +279,72 @@ function SettingsPage() {
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="radio"
+                checked={mailMode === "gmail_oauth"}
+                onChange={() => setMailMode("gmail_oauth")}
+              />
+              Connect Gmail (OAuth) — no password paste; school office Gmail authorises NEXUS once
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
                 checked={mailMode === "smtp"}
                 onChange={() => setMailMode("smtp")}
               />
-              Use our school mailbox (SMTP) — Gmail App Password, Outlook, cPanel, etc.
+              Use school mailbox via SMTP (App Password / cPanel / Outlook)
             </label>
+            {mailMode === "gmail_oauth" && (
+              <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-2">
+                {gmailConnected ? (
+                  <p className="text-sm">
+                    Connected as <strong>{gmailAddress || "Gmail"}</strong>. Staff invites will
+                    send from this account.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Sign in with the school Gmail (or Google Workspace) account that should appear
+                    as the sender.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    onClick={async () => {
+                      if (!s) return;
+                      try {
+                        const r = await startSchoolGmailOAuth({
+                          data: { schoolId: s.id },
+                        });
+                        window.location.href = r.url;
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Could not start Google login");
+                      }
+                    }}
+                  >
+                    {gmailConnected ? "Reconnect Gmail" : "Connect Gmail"}
+                  </Button>
+                  {gmailConnected && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={async () => {
+                        if (!s) return;
+                        try {
+                          await disconnectSchoolGmail({ data: { schoolId: s.id } });
+                          setGmailConnected(false);
+                          setGmailAddress("");
+                          setMailMode("platform");
+                          toast.success("Gmail disconnected");
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : "Failed");
+                        }
+                      }}
+                    >
+                      Disconnect
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label>From name</Label>
@@ -332,7 +414,7 @@ function SettingsPage() {
                     await updateSchoolEmailSettings({
                       data: {
                         schoolId: s.id,
-                        mode: mailMode,
+                        mode: mailMode === "gmail_oauth" ? "gmail_oauth" : mailMode,
                         fromName: mailFromName,
                         fromEmail: mailFromEmail,
                         replyTo: mailReplyTo,

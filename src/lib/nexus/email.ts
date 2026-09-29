@@ -216,6 +216,11 @@ export type SchoolSmtpConfig = {
   smtpUser?: string | null;
   smtpPass?: string | null;
   smtpSecure?: boolean | null;
+  gmailRefreshToken?: string | null;
+  gmailAccessToken?: string | null;
+  gmailTokenExpiresAt?: string | null;
+  gmailAddress?: string | null;
+  schoolId?: string | null;
 };
 
 /** Send using school SMTP when mode=smtp and credentials exist; else platform. */
@@ -225,6 +230,36 @@ export async function sendEmailForSchool(
 ): Promise<EmailResult> {
   const replyTo = opts.replyTo || school?.replyTo || school?.fromEmail || undefined;
   const fromName = opts.fromName || school?.fromName || undefined;
+
+  if (school && (school.mode || "").toLowerCase() === "gmail_oauth" && school.gmailRefreshToken) {
+    try {
+      const { refreshGmailAccessToken, sendViaGmailApi } = await import("./gmail-oauth");
+      let access = school.gmailAccessToken || "";
+      const exp = school.gmailTokenExpiresAt
+        ? new Date(school.gmailTokenExpiresAt).getTime()
+        : 0;
+      if (!access || exp < Date.now() + 60_000) {
+        const refreshed = await refreshGmailAccessToken(school.gmailRefreshToken);
+        access = refreshed.access_token;
+      }
+      const addr = school.gmailAddress || school.fromEmail || "me";
+      const display = (fromName || school.fromName || "School").replace(/[<>\n\r]/g, "");
+      const fromHeader = `${display} <${addr}>`;
+      const sent = await sendViaGmailApi({
+        accessToken: access,
+        from: fromHeader,
+        to: opts.to,
+        subject: opts.subject,
+        html: opts.html,
+        text: opts.text,
+        replyTo: replyTo,
+      });
+      return { ok: true, provider: "gmail-oauth", id: sent.id };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Gmail OAuth send failed";
+      console.error("[NEXUS EMAIL] gmail oauth failed, platform fallback:", msg);
+    }
+  }
 
   if (
     school &&

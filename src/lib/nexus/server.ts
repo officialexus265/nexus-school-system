@@ -6868,7 +6868,9 @@ export const getSchoolEmailSettings = createServerFn({ method: "POST" })
         select school_id, from_name, from_email, reply_to, mode,
                smtp_host, smtp_port, smtp_user, smtp_secure,
                verified_at, last_test_at, last_test_ok, last_test_error,
-               case when smtp_pass is not null and smtp_pass <> '' then true else false end as has_smtp_pass
+               case when smtp_pass is not null and smtp_pass <> '' then true else false end as has_smtp_pass,
+               gmail_address, gmail_connected_at,
+               case when gmail_refresh_token is not null and gmail_refresh_token <> '' then true else false end as gmail_connected
         from school_email_settings where school_id = ${data.schoolId} limit 1
       `;
       if (rows[0]) return { settings: rows[0] };
@@ -6899,7 +6901,7 @@ export const updateSchoolEmailSettings = createServerFn({ method: "POST" })
   .validator(
     (data: {
       schoolId: string;
-      mode?: "platform" | "smtp";
+      mode?: "platform" | "smtp" | "gmail_oauth";
       fromName?: string;
       fromEmail?: string;
       replyTo?: string;
@@ -7033,8 +7035,198 @@ async function loadSchoolMailConfig(
       smtpUser: row.smtp_user ? String(row.smtp_user) : null,
       smtpPass: row.smtp_pass ? String(row.smtp_pass) : null,
       smtpSecure: Boolean(row.smtp_secure),
+      gmailRefreshToken: row.gmail_refresh_token
+        ? String(row.gmail_refresh_token)
+        : null,
+      gmailAccessToken: row.gmail_access_token ? String(row.gmail_access_token) : null,
+      gmailTokenExpiresAt: row.gmail_token_expires_at
+        ? String(row.gmail_token_expires_at)
+        : null,
+      gmailAddress: row.gmail_address ? String(row.gmail_address) : null,
+      schoolId,
     };
   } catch {
     return null;
   }
 }
+
+
+export const startSchoolGmailOAuth = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const { gmailOAuthConfigured, buildGmailAuthUrl } = await import("./gmail-oauth");
+    if (!gmailOAuthConfigured()) {
+      throw new Error(
+        "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set on the server. Add redirect URI: /api/gmail/callback",
+      );
+    }
+    const state = Buffer.from(
+      JSON.stringify({ schoolId: data.schoolId, t: Date.now() }),
+      "utf8",
+    )
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    return { url: buildGmailAuthUrl(state) };
+  });
+
+export const disconnectSchoolGmail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    await sql.query(
+      `update school_email_settings set
+         mode = 'platform',
+         gmail_refresh_token = null,
+         gmail_access_token = null,
+         gmail_token_expires_at = null,
+         gmail_address = null,
+         gmail_connected_at = null,
+         updated_at = now()
+       where school_id = $1`,
+      [data.schoolId],
+    );
+    return { ok: true };
+  });
+
+
+/** Public: load staff invite by token (no auth). */
+export const getStaffInvite = createServerFn({ method: "POST" })
+  .validator((data: { token: string }) => data)
+  .handler(async ({ data }) => {
+    const token = data.token?.trim();
+    if (!token) throw new Error("Token required");
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      school_id: string;
+      email: string;
+      full_name: string;
+      role_name: string | null;
+      role_id: string | null;
+      expires_at: string;
+      accepted_at: string | null;
+    }>`
+      select id, school_id, email, full_name, role_name, role_id, expires_at, accepted_at
+      from staff_invites where token = ${token} limit 1
+    `;
+    const inv = rows[0];
+    if (!inv) throw new Error("Staff invite not found or already used");
+    if (inv.accepted_at) throw new Error("This invite was already accepted");
+    if (new Date(inv.expires_at).getTime() < Date.now()) {
+      throw new Error("This invite has expired. Ask the school to send a new one.");
+    }
+    const school = await sql<{ name: string }>`
+      select name from schools where id = ${inv.school_id} limit 1
+    `;
+    return {
+      schoolId: inv.school_id,
+      schoolName: school[0]?.name || "School",
+      email: inv.email,
+      fullName: inv.full_name,
+      roleName: inv.role_name || "teacher",
+      roleId: inv.role_id,
+    };
+  });
+
+/** After staff signs up / sets password — link membership and mark invite used. */
+export const completeStaffInvite = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { token: string }) => data)
+  .handler(async ({ context, data }) => {
+    const token = data.token?.trim();
+    if (!token) throw new Error("Token required");
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      school_id: string;
+      email: string;
+      full_name: string;
+      role_name: string | null;
+      role_id: string | null;
+      accepted_at: string | null;
+      expires_at: string;
+    }>`
+      select * from staff_invites where token = ${token} limit 1
+    `;
+    const inv = rows[0];
+    if (!inv) throw new Error("Staff invite not found");
+    if (inv.accepted_at) return { ok: true, schoolId: inv.school_id, already: true };
+    if (new Date(inv.expires_at).getTime() < Date.now()) {
+      throw new Error("Invite expired");
+    }
+
+    const user = await sql<{ email: string }>`
+      select email from "user" where id = ${context.userId} limit 1
+    `;
+    const userEmail = (user[0]?.email || "").toLowerCase();
+    if (userEmail && userEmail !== inv.email.toLowerCase()) {
+      throw new Error(
+        `Signed in as ${userEmail} but invite is for ${inv.email}. Use the invited email.`,
+      );
+    }
+
+    const roleTitle = inv.role_name || "teacher";
+    // Membership
+    try {
+      await sql.query(
+        `insert into school_memberships (id, school_id, user_id, role, created_at)
+         values ($1,$2,$3,$4,now())
+         on conflict do nothing`,
+        [nid(context.userId, `mem-${Date.now()}`), inv.school_id, context.userId, roleTitle],
+      );
+    } catch {
+      try {
+        await sql.query(
+          `insert into school_memberships (school_id, user_id, role)
+           values ($1,$2,$3) on conflict do nothing`,
+          [inv.school_id, context.userId, roleTitle],
+        );
+      } catch (e) {
+        console.error("[completeStaffInvite] membership", e);
+      }
+    }
+
+    // Link staff row to this user
+    try {
+      await sql.query(
+        `update staff set user_id = $1, status = 'ACTIVE', role_title = coalesce(role_title, $2)
+         where school_id = $3 and lower(email) = $4`,
+        [context.userId, roleTitle, inv.school_id, inv.email.toLowerCase()],
+      );
+    } catch {
+      try {
+        await sql.query(
+          `update staff set user_id = $1 where school_id = $2 and lower(email) = $3`,
+          [context.userId, inv.school_id, inv.email.toLowerCase()],
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Custom role assignment if role_id set
+    if (inv.role_id) {
+      try {
+        await sql.query(
+          `insert into staff_role_assignments (staff_user_id, role_id, school_id)
+           values ($1,$2,$3) on conflict do nothing`,
+          [context.userId, inv.role_id, inv.school_id],
+        );
+      } catch {
+        /* optional table */
+      }
+    }
+
+    await sql.query(
+      `update staff_invites set accepted_at = now() where id = $1`,
+      [inv.id],
+    );
+
+    return { ok: true, schoolId: inv.school_id, roleName: roleTitle };
+  });
