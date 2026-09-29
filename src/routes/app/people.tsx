@@ -17,6 +17,8 @@ import {
   listSchoolRoles,
   registerSmsParent,
   reviewParentVerification,
+  deleteParentRecord,
+  deleteStaffRecord,
 } from "@/lib/nexus/server";
 import { classById, classLabel } from "@/lib/nexus/selectors";
 import { studentName } from "@/lib/utils";
@@ -296,6 +298,25 @@ function PeoplePage() {
                       <td className="px-4 py-3">
                         <span className="text-xs text-muted-foreground">
                           {smsOnlyFlag ? "SMS only" : "App / SMS"}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="ml-2 text-red-600"
+                          onClick={async () => {
+                            if (!window.confirm("Delete this parent?")) return;
+                            try {
+                              await deleteParentRecord({
+                                data: { schoolId: snap.school.id, parentId: p.id },
+                              });
+                              toast.success("Parent deleted");
+                              void invalidate();
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : "Failed");
+                            }
+                          }}
+                        >
+                          Delete
+                        </Button>
                         </span>
                       </td>
                       <td className="px-4 py-3">

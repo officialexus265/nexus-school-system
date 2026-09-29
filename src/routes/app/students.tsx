@@ -23,6 +23,7 @@ import {
   addStudent,
   bulkImportParents,
   bulkImportStudents,
+  deleteStudentRecord,
 } from "@/lib/nexus/server";
 import { classById, classLabel, studentAttendance, studentBalance } from "@/lib/nexus/selectors";
 import { money, pct, studentName } from "@/lib/utils";
@@ -32,6 +33,7 @@ export const Route = createFileRoute("/app/students")({ component: StudentsPage 
 
 function StudentsPage() {
   const q = useSnapshot();
+  const invalidate = useInvalidateSnapshot();
   const persona = useNexusSession((s) => s.persona);
   const dark = persona === "parent";
   if (q.isPending) return <Skeleton className="h-64" />;
@@ -44,7 +46,7 @@ function StudentsPage() {
       <PageHeader
         kicker="People"
         title="Students"
-        description="Records are archived, not deleted. Historical results and fees remain."
+        description="Manage the student roster. Delete removes the student record (use carefully)."
         actions={persona === "parent" ? null : (<><BulkImport schoolId={snap.school.id} onDone={() => void q.refetch()} /><EnrollDialog schoolId={snap.school.id} classes={snap.classes} /></>)}
       />
       <div className="overflow-x-auto rounded-xl bg-card text-card-foreground shadow-[var(--shadow-border)]">
@@ -57,6 +59,7 @@ function StudentsPage() {
               <th className="px-4 py-3 font-medium">Attend.</th>
               <th className="px-4 py-3 font-medium">Balance</th>
               <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium"> </th>
             </tr>
           </thead>
           <tbody>
@@ -74,6 +77,27 @@ function StudentsPage() {
                 <td className="px-4 py-3 tabular-nums">{money(studentBalance(snap, s.id))}</td>
                 <td className="px-4 py-3">
                   <StatusPill value={s.status} />
+                </td>
+                <td className="px-4 py-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600"
+                    onClick={async () => {
+                      if (!window.confirm(`Delete student ${studentName(s)}?`)) return;
+                      try {
+                        await deleteStudentRecord({
+                          data: { schoolId: snap.school.id, studentId: s.id },
+                        });
+                        toast.success("Student deleted");
+                        void invalidate();
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Failed");
+                      }
+                    }}
+                  >
+                    Delete
+                  </Button>
                 </td>
               </tr>
             ))}

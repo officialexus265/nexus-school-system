@@ -111,6 +111,8 @@ export type SchoolInvite = {
 };
 
 export type Staff = {
+  section?: string | null;
+  is_section_head?: boolean;
   id: string;
   user_id: string;
   school_id: string;

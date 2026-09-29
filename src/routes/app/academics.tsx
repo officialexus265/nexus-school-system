@@ -10,12 +10,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import {
+  assignStaffSection,
   createAssessment,
   createExamination,
+  createSchoolClass,
+  createSchoolSubject,
+  deleteSchoolClass,
+  deleteSchoolSubject,
   ensureGradingScale,
   listExaminations,
   promoteStudents,
   recalculateRankings,
+  setSectionHead,
   updateGradingScale,
   updateRankingSettings,
 } from "@/lib/nexus/server";
@@ -107,51 +113,208 @@ function AcademicsPage() {
           <TabsTrigger value="promote">Promote / transfer</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="structure" className="mt-4">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-              <h2 className="font-display text-xl">Classes</h2>
-              <ul className="mt-3 divide-y divide-border">
-                {snap.classes.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between py-2 text-sm">
-                    <span>
-                      {classLabel(c)}
-                      <span className="ml-2 text-xs text-muted-foreground">{c.section}</span>
-                    </span>
-                    <span className="tabular-nums text-muted-foreground">
-                      {snap.students.filter((s) => s.class_id === c.id).length} students
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-              <h2 className="font-display text-xl">Terms</h2>
-              <ul className="mt-3 divide-y divide-border">
-                {snap.terms.map((t) => (
-                  <li key={t.id} className="flex items-center justify-between py-2 text-sm">
-                    <span>
-                      {t.name} {t.is_current ? <StatusPill value="ACTIVE" /> : null}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDate(t.start_date)} – {formatDate(t.end_date)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)] lg:col-span-2">
-              <h2 className="font-display text-xl">Subjects</h2>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {snap.subjects.map((s) => (
-                  <span key={s.id} className="rounded-lg bg-secondary px-3 py-1.5 text-sm">
-                    {s.name}
-                    {s.code ? ` (${s.code})` : ""}
-                  </span>
-                ))}
-              </div>
-            </section>
-          </div>
+        <TabsContent value="structure" className="mt-4 space-y-6">
+          <p className="text-sm text-muted-foreground">
+            The school is organised into <strong>Nursery</strong>, <strong>Primary</strong>, and{" "}
+            <strong>Secondary</strong>. Each section has its own classes, subjects, teachers, and
+            optional head teacher. Defaults can be deleted; add as many subjects/classes as you offer.
+          </p>
+          {(["Nursery", "Primary", "Secondary"] as const).map((section) => {
+            const sectionClasses = snap.classes.filter(
+              (c) => (c.section || "").toLowerCase() === section.toLowerCase(),
+            );
+            const sectionSubjects = snap.subjects.filter(
+              (s) => !s.section || (s.section || "").toLowerCase() === section.toLowerCase(),
+            );
+            const sectionStaff = snap.staff.filter(
+              (st) => (st.section || "").toLowerCase() === section.toLowerCase(),
+            );
+            const head = sectionStaff.find((st) => st.is_section_head);
+            return (
+              <section
+                key={section}
+                className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h2 className="font-display text-xl">{section}</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Head: {head ? head.full_name : "— not set —"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <h3 className="text-sm font-medium">Classes</h3>
+                    <ul className="mt-2 divide-y divide-border">
+                      {sectionClasses.map((c) => (
+                        <li
+                          key={c.id}
+                          className="flex items-center justify-between gap-2 py-2 text-sm"
+                        >
+                          <span>
+                            {classLabel(c)}
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              {snap.students.filter((s) => s.class_id === c.id).length} students
+                            </span>
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600"
+                            onClick={async () => {
+                              if (!window.confirm(`Delete class “${c.name}”?`)) return;
+                              try {
+                                await deleteSchoolClass({
+                                  data: { schoolId: snap.school.id, classId: c.id },
+                                });
+                                toast.success("Class deleted");
+                                void invalidate();
+                              } catch (e) {
+                                toast.error(e instanceof Error ? e.message : "Failed");
+                              }
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </li>
+                      ))}
+                      {sectionClasses.length === 0 && (
+                        <li className="py-2 text-sm text-muted-foreground">No classes yet</li>
+                      )}
+                    </ul>
+                    <AddClassForm
+                      section={section}
+                      schoolId={snap.school.id}
+                      onDone={() => void invalidate()}
+                    />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium">Subjects</h3>
+                    <ul className="mt-2 divide-y divide-border">
+                      {sectionSubjects.map((s) => (
+                        <li
+                          key={s.id}
+                          className="flex items-center justify-between gap-2 py-2 text-sm"
+                        >
+                          <span>
+                            {s.name}
+                            {s.code ? ` (${s.code})` : ""}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600"
+                            onClick={async () => {
+                              if (!window.confirm(`Delete subject “${s.name}”?`)) return;
+                              try {
+                                await deleteSchoolSubject({
+                                  data: { schoolId: snap.school.id, subjectId: s.id },
+                                });
+                                toast.success("Subject deleted");
+                                void invalidate();
+                              } catch (e) {
+                                toast.error(e instanceof Error ? e.message : "Failed");
+                              }
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </li>
+                      ))}
+                      {sectionSubjects.length === 0 && (
+                        <li className="py-2 text-sm text-muted-foreground">No subjects yet</li>
+                      )}
+                    </ul>
+                    <AddSubjectForm
+                      section={section}
+                      schoolId={snap.school.id}
+                      onDone={() => void invalidate()}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <h3 className="text-sm font-medium">Teachers in this section</h3>
+                  <ul className="mt-2 space-y-1 text-sm">
+                    {snap.staff.map((st) => {
+                      const inSection =
+                        (st.section || "").toLowerCase() === section.toLowerCase();
+                      return (
+                        <li
+                          key={st.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-2 py-1.5"
+                        >
+                          <span>
+                            {st.full_name}
+                            {st.is_section_head && inSection ? (
+                              <span className="ml-2 text-xs text-emerald-600">Head</span>
+                            ) : null}
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              size="sm"
+                              variant={inSection ? "default" : "outline"}
+                              onClick={async () => {
+                                try {
+                                  await assignStaffSection({
+                                    data: {
+                                      schoolId: snap.school.id,
+                                      staffId: st.id,
+                                      section: inSection ? null : section,
+                                    },
+                                  });
+                                  toast.success(
+                                    inSection
+                                      ? "Removed from section"
+                                      : `Assigned to ${section}`,
+                                  );
+                                  void invalidate();
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : "Failed");
+                                }
+                              }}
+                            >
+                              {inSection ? "Unassign" : `Assign to ${section}`}
+                            </Button>
+                            {inSection && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={async () => {
+                                  try {
+                                    await setSectionHead({
+                                      data: {
+                                        schoolId: snap.school.id,
+                                        staffId: st.id,
+                                        section,
+                                        isHead: !st.is_section_head,
+                                      },
+                                    });
+                                    toast.success(
+                                      st.is_section_head
+                                        ? "Head role cleared"
+                                        : "Set as section head",
+                                    );
+                                    void invalidate();
+                                  } catch (e) {
+                                    toast.error(e instanceof Error ? e.message : "Failed");
+                                  }
+                                }}
+                              >
+                                {st.is_section_head ? "Clear head" : "Make head"}
+                              </Button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </section>
+            );
+          })}
         </TabsContent>
 
         <TabsContent value="assessments" className="mt-4 space-y-4">
@@ -606,5 +769,98 @@ function AcademicsPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+
+function AddClassForm({
+  section,
+  schoolId,
+  onDone,
+}: {
+  section: string;
+  schoolId: string;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="mt-2 flex gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!name.trim()) return;
+        setBusy(true);
+        try {
+          await createSchoolClass({
+            data: { schoolId, section, name: name.trim() },
+          });
+          setName("");
+          toast.success("Class added");
+          onDone();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Input
+        placeholder={section === "Nursery" ? "e.g. Baby class" : "Class name"}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <Button type="submit" size="sm" disabled={busy}>
+        Add
+      </Button>
+    </form>
+  );
+}
+
+function AddSubjectForm({
+  section,
+  schoolId,
+  onDone,
+}: {
+  section: string;
+  schoolId: string;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="mt-2 flex flex-wrap gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!name.trim()) return;
+        setBusy(true);
+        try {
+          await createSchoolSubject({
+            data: {
+              schoolId,
+              section,
+              name: name.trim(),
+              code: code.trim() || undefined,
+            },
+          });
+          setName("");
+          setCode("");
+          toast.success("Subject added");
+          onDone();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Input placeholder="Subject name" value={name} onChange={(e) => setName(e.target.value)} />
+      <Input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} className="w-24" />
+      <Button type="submit" size="sm" disabled={busy}>
+        Add
+      </Button>
+    </form>
   );
 }

@@ -88,11 +88,21 @@ function SetupWizardPage() {
   const [appName, setAppName] = useState("");
 
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([
-    "Mathematics",
-    "English",
-    "Science",
+  const [nurseryClasses, setNurseryClasses] = useState<string[]>(["Baby class", "Reception"]);
+  const [nurseryDraft, setNurseryDraft] = useState("");
+  const [selectedSubjects, setSelectedSubjects] = useState<
+    { name: string; code: string; section: string }[]
+  >([
+    { name: "Mathematics", code: "MATH", section: "Primary" },
+    { name: "English", code: "ENG", section: "Primary" },
+    { name: "Science", code: "SCI", section: "Primary" },
+    { name: "Mathematics", code: "MATH", section: "Secondary" },
+    { name: "English", code: "ENG", section: "Secondary" },
+    { name: "Play / Activity", code: "PLAY", section: "Nursery" },
   ]);
+  const [customSubjectName, setCustomSubjectName] = useState("");
+  const [customSubjectCode, setCustomSubjectCode] = useState("");
+  const [customSubjectSection, setCustomSubjectSection] = useState("Primary");
 
   useEffect(() => {
     if (!school) return;
@@ -157,11 +167,6 @@ function SetupWizardPage() {
     );
   }
 
-  function toggleSubject(name: string) {
-    setSelectedSubjects((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name],
-    );
-  }
 
   async function handleNext() {
     setBusy(true);
@@ -184,24 +189,36 @@ function SetupWizardPage() {
         await markDone("branding_done");
         toast.success("Branding saved");
       } else if (current.key === "academics") {
-        if (selectedClassIds.length < 1) {
-          toast.error("Select at least one class");
+        const primarySecondary = ALL_CLASS_OPTIONS.filter((c) =>
+          selectedClassIds.includes(c.id),
+        ).map((c) => ({
+          section: c.section,
+          name: c.name,
+          stream: undefined as string | undefined,
+          level_order: c.level,
+        }));
+        const nursery = nurseryClasses
+          .map((n) => n.trim())
+          .filter(Boolean)
+          .map((name, i) => ({
+            section: "Nursery",
+            name,
+            stream: undefined as string | undefined,
+            level_order: i + 1,
+          }));
+        const classes = [...nursery, ...primarySecondary];
+        if (classes.length < 1) {
+          toast.error("Add at least one class (Nursery, Primary, or Secondary)");
           setBusy(false);
           return;
         }
-        const classes = ALL_CLASS_OPTIONS.filter((c) => selectedClassIds.includes(c.id)).map(
-          (c) => ({
-            section: c.section,
-            name: c.name,
-            stream: undefined as string | undefined,
-            level_order: c.level,
-          }),
-        );
-        const subjects = DEFAULT_SUBJECTS.filter((s) => selectedSubjects.includes(s.name)).map(
-          (s) => ({ name: s.name, code: s.code }),
-        );
+        const subjects = selectedSubjects.map((s) => ({
+          name: s.name,
+          code: s.code,
+          section: s.section,
+        }));
         if (subjects.length < 1) {
-          toast.error("Select at least one subject");
+          toast.error("Add at least one subject");
           setBusy(false);
           return;
         }
@@ -329,10 +346,53 @@ function SetupWizardPage() {
         )}
 
         {current.key === "academics" && (
-          <div className="mt-4 space-y-6">
+          <div className="mt-4 space-y-8">
+            <div>
+              <h3 className="font-medium">Nursery classes (add your own)</h3>
+              <p className="text-xs text-muted-foreground">
+                e.g. Baby class, Reception, Middle class — names are up to the school.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {nurseryClasses.map((n, i) => (
+                  <li key={`${n}-${i}`} className="flex items-center gap-2 text-sm">
+                    <span className="flex-1 rounded-md border border-border px-3 py-1.5">{n}</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setNurseryClasses((prev) => prev.filter((_, j) => j !== i))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 flex gap-2">
+                <Input
+                  placeholder="New nursery class name"
+                  value={nurseryDraft}
+                  onChange={(e) => setNurseryDraft(e.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const v = nurseryDraft.trim();
+                    if (!v) return;
+                    setNurseryClasses((prev) => [...prev, v]);
+                    setNurseryDraft("");
+                  }}
+                >
+                  Add
+                </Button>
+              </div>
+            </div>
+
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <Label>Primary classes (select all that apply)</Label>
+                <Label>Primary (Standard 1–8)</Label>
                 <Button
                   type="button"
                   size="sm"
@@ -342,7 +402,7 @@ function SetupWizardPage() {
                       const ids = PRIMARY_CLASSES.map((c) => c.id);
                       const allOn = ids.every((id) => prev.includes(id));
                       return allOn
-                        ? prev.filter((id) => !ids.includes(id as typeof ids[number]))
+                        ? prev.filter((id) => !ids.includes(id as (typeof ids)[number]))
                         : [...new Set([...prev, ...ids])];
                     })
                   }
@@ -366,9 +426,10 @@ function SetupWizardPage() {
                 ))}
               </div>
             </div>
+
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <Label>Secondary classes (select all that apply)</Label>
+                <Label>Secondary (Form 1–6)</Label>
                 <Button
                   type="button"
                   size="sm"
@@ -378,7 +439,7 @@ function SetupWizardPage() {
                       const ids = SECONDARY_CLASSES.map((c) => c.id);
                       const allOn = ids.every((id) => prev.includes(id));
                       return allOn
-                        ? prev.filter((id) => !ids.includes(id as typeof ids[number]))
+                        ? prev.filter((id) => !ids.includes(id as (typeof ids)[number]))
                         : [...new Set([...prev, ...ids])];
                     })
                   }
@@ -402,25 +463,72 @@ function SetupWizardPage() {
                 ))}
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Selected: {selectedClassIds.length} class(es). At least one is required.
-            </p>
+
             <div>
-              <Label>Subjects (select at least one)</Label>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {DEFAULT_SUBJECTS.map((s) => (
-                  <label
-                    key={s.code}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-secondary/50"
+              <Label>Subjects by section (defaults can be removed; add as many as you offer)</Label>
+              <ul className="mt-2 space-y-1">
+                {selectedSubjects.map((s, i) => (
+                  <li
+                    key={`${s.section}-${s.name}-${i}`}
+                    className="flex flex-wrap items-center gap-2 text-sm"
                   >
-                    <input
-                      type="checkbox"
-                      checked={selectedSubjects.includes(s.name)}
-                      onChange={() => toggleSubject(s.name)}
-                    />
-                    {s.name} ({s.code})
-                  </label>
+                    <span className="rounded bg-secondary px-2 py-0.5 text-xs">{s.section}</span>
+                    <span className="flex-1">
+                      {s.name} {s.code ? `(${s.code})` : ""}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setSelectedSubjects((prev) => prev.filter((_, j) => j !== i))
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </li>
                 ))}
+              </ul>
+              <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                <Input
+                  placeholder="Subject name"
+                  value={customSubjectName}
+                  onChange={(e) => setCustomSubjectName(e.target.value)}
+                />
+                <Input
+                  placeholder="Code"
+                  value={customSubjectCode}
+                  onChange={(e) => setCustomSubjectCode(e.target.value)}
+                />
+                <select
+                  className="flex h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={customSubjectSection}
+                  onChange={(e) => setCustomSubjectSection(e.target.value)}
+                >
+                  <option value="Nursery">Nursery</option>
+                  <option value="Primary">Primary</option>
+                  <option value="Secondary">Secondary</option>
+                </select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const name = customSubjectName.trim();
+                    if (!name) return;
+                    setSelectedSubjects((prev) => [
+                      ...prev,
+                      {
+                        name,
+                        code: customSubjectCode.trim() || name.slice(0, 4).toUpperCase(),
+                        section: customSubjectSection,
+                      },
+                    ]);
+                    setCustomSubjectName("");
+                    setCustomSubjectCode("");
+                  }}
+                >
+                  Add subject
+                </Button>
               </div>
             </div>
           </div>

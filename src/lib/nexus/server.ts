@@ -2256,7 +2256,7 @@ export const saveWizardAcademics = createServerFn({ method: "POST" })
   .validator(
     (data: {
       schoolId: string;
-      classes: { section: string; name: string; stream?: string }[];
+      classes: { section: string; name: string; stream?: string; level_order?: number }[];
       subjects: { name: string; code?: string; section?: string }[];
     }) => data,
   )
@@ -2274,7 +2274,7 @@ export const saveWizardAcademics = createServerFn({ method: "POST" })
       await sql.query(
         `insert into classes (id, user_id, school_id, section, name, stream, level_order)
          values ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, uid, data.schoolId, c.section, c.name, c.stream || null, i],
+        [id, uid, data.schoolId, c.section, c.name, c.stream || null, c.level_order ?? i + 1],
       );
     }
     for (const [i, s] of data.subjects.entries()) {
@@ -6228,4 +6228,233 @@ export const uploadSchoolFile = createServerFn({ method: "POST" })
     throw new Error(
       "Binary upload requires STORAGE_PROVIDER=cloudinary (or paste an external URL).",
     );
+  });
+
+
+// ---------------------------------------------------------------------------
+// Section-aware academics: classes, subjects, heads, deletions
+// ---------------------------------------------------------------------------
+
+const SECTION_VALUES = ["Nursery", "Primary", "Secondary"] as const;
+
+export const createSchoolClass = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      section: string;
+      name: string;
+      stream?: string;
+      levelOrder?: number;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const name = data.name.trim();
+    if (!name) throw new Error("Class name is required");
+    const section = data.section.trim() || "Primary";
+    const sql = await getSql();
+    const school = await sql<{ user_id: string }>`
+      select user_id from schools where id = ${data.schoolId} limit 1
+    `;
+    if (!school[0]) throw new Error("School not found");
+    const id = nid(context.userId, `cls-${Date.now()}`);
+    await sql.query(
+      `insert into classes (id, user_id, school_id, section, name, stream, level_order)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        id,
+        school[0].user_id,
+        data.schoolId,
+        section,
+        name,
+        data.stream?.trim() || null,
+        data.levelOrder ?? 0,
+      ],
+    );
+    return { ok: true, id };
+  });
+
+export const deleteSchoolClass = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; classId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const linked = await sql<{ c: number }>`
+      select count(*)::int as c from students
+      where school_id = ${data.schoolId} and class_id = ${data.classId} and status = 'ACTIVE'
+    `;
+    if ((linked[0]?.c ?? 0) > 0) {
+      throw new Error(
+        `Cannot delete: ${linked[0].c} active student(s) still in this class. Move or archive them first.`,
+      );
+    }
+    await sql.query(
+      `delete from teacher_assignments where school_id = $1 and class_id = $2`,
+      [data.schoolId, data.classId],
+    );
+    await sql.query(
+      `delete from classes where id = $1 and school_id = $2`,
+      [data.classId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const createSchoolSubject = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      name: string;
+      code?: string;
+      section?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const name = data.name.trim();
+    if (!name) throw new Error("Subject name is required");
+    const sql = await getSql();
+    const school = await sql<{ user_id: string }>`
+      select user_id from schools where id = ${data.schoolId} limit 1
+    `;
+    if (!school[0]) throw new Error("School not found");
+    const id = nid(context.userId, `sub-${Date.now()}`);
+    await sql.query(
+      `insert into subjects (id, user_id, school_id, name, code, section)
+       values ($1,$2,$3,$4,$5,$6)`,
+      [
+        id,
+        school[0].user_id,
+        data.schoolId,
+        name,
+        data.code?.trim() || null,
+        data.section?.trim() || null,
+      ],
+    );
+    return { ok: true, id };
+  });
+
+export const deleteSchoolSubject = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; subjectId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    await sql.query(
+      `delete from teacher_assignments where school_id = $1 and subject_id = $2`,
+      [data.schoolId, data.subjectId],
+    );
+    await sql.query(
+      `delete from subjects where id = $1 and school_id = $2`,
+      [data.subjectId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const setSectionHead = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      staffId: string;
+      section: string;
+      isHead: boolean;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "staff.manage");
+    const section = data.section.trim();
+    if (!SECTION_VALUES.includes(section as (typeof SECTION_VALUES)[number])) {
+      throw new Error("Section must be Nursery, Primary, or Secondary");
+    }
+    const sql = await getSql();
+    if (data.isHead) {
+      // Only one head per section
+      await sql.query(
+        `update staff set is_section_head = false
+         where school_id = $1 and section = $2 and is_section_head = true`,
+        [data.schoolId, section],
+      );
+    }
+    await sql.query(
+      `update staff set section = $1, is_section_head = $2
+       where id = $3 and school_id = $4`,
+      [section, data.isHead, data.staffId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const assignStaffSection = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: { schoolId: string; staffId: string; section: string | null }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "staff.manage");
+    const sql = await getSql();
+    const section = data.section?.trim() || null;
+    if (
+      section &&
+      !SECTION_VALUES.includes(section as (typeof SECTION_VALUES)[number])
+    ) {
+      throw new Error("Section must be Nursery, Primary, or Secondary");
+    }
+    await sql.query(
+      `update staff set section = $1 where id = $2 and school_id = $3`,
+      [section, data.staffId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const deleteStudentRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; studentId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "students.manage");
+    const sql = await getSql();
+    await sql.query(
+      `delete from parent_students where student_id = $1`,
+      [data.studentId],
+    );
+    await sql.query(
+      `delete from students where id = $1 and school_id = $2`,
+      [data.studentId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const deleteParentRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; parentId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "parents.manage");
+    const sql = await getSql();
+    await sql.query(
+      `delete from parent_students where parent_id = $1`,
+      [data.parentId],
+    );
+    await sql.query(
+      `delete from parents where id = $1 and school_id = $2`,
+      [data.parentId, data.schoolId],
+    );
+    return { ok: true };
+  });
+
+export const deleteStaffRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; staffId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "staff.manage");
+    const sql = await getSql();
+    await sql.query(
+      `delete from teacher_assignments where staff_id = $1 and school_id = $2`,
+      [data.staffId, data.schoolId],
+    );
+    await sql.query(
+      `delete from staff where id = $1 and school_id = $2`,
+      [data.staffId, data.schoolId],
+    );
+    return { ok: true };
   });
