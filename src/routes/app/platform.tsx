@@ -213,7 +213,155 @@ function PlatformPage() {
       </div>
 
       {showCreate && (
-        
+        <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+          <h2 className="font-display text-xl">Create school & invite owner</h2>
+          <form onSubmit={handleCreate} className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="schoolName">School name *</Label>
+              <Input
+                id="schoolName"
+                value={schoolName}
+                onChange={(e) => setSchoolName(e.target.value)}
+                required
+                placeholder="e.g. Lakeview Secondary"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="city">City</Label>
+              <Input
+                id="city"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="e.g. Lilongwe"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="area">Area / neighbourhood</Label>
+              <Input
+                id="area"
+                value={area}
+                onChange={(e) => setArea(e.target.value)}
+                placeholder="e.g. Area 10, Ndirande"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ownerName">Owner full name *</Label>
+              <Input
+                id="ownerName"
+                value={ownerName}
+                onChange={(e) => setOwnerName(e.target.value)}
+                required
+                placeholder="e.g. Chisomo Banda"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ownerEmail">Owner email *</Label>
+              <Input
+                id="ownerEmail"
+                type="email"
+                value={ownerEmail}
+                onChange={(e) => setOwnerEmail(e.target.value)}
+                required
+                placeholder="owner@school.ac.mw"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>School package (sections)</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={billingTier}
+                onChange={(e) => {
+                  const tier = e.target.value as BillingTier;
+                  setBillingTier(tier);
+                  setActivationFee(String(priceFor(tier, billingPeriod)));
+                }}
+              >
+                {BILLING_TIER_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label} — {formatMwk(SUBSCRIPTION_PRICES[o.value].monthly)} / month
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Payment period</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={billingPeriod}
+                onChange={(e) => {
+                  const period = e.target.value as BillingPeriod;
+                  setBillingPeriod(period);
+                  setActivationFee(String(priceFor(billingTier, period)));
+                }}
+              >
+                <option value="monthly">
+                  Monthly — {formatMwk(priceFor(billingTier, "monthly"))}
+                </option>
+                <option value="term">
+                  Per term — {formatMwk(priceFor(billingTier, "term"))}
+                </option>
+                <option value="annual">
+                  Academic year — {formatMwk(priceFor(billingTier, "annual"))}
+                </option>
+              </select>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>All price options</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={`${billingTier}:${billingPeriod}`}
+                onChange={(e) => {
+                  const [tier, period] = e.target.value.split(":") as [
+                    BillingTier,
+                    BillingPeriod,
+                  ];
+                  setBillingTier(tier);
+                  setBillingPeriod(period);
+                  setActivationFee(String(priceFor(tier, period)));
+                }}
+              >
+                {BILLING_TIER_OPTIONS.flatMap((o) =>
+                  (["monthly", "term", "annual"] as BillingPeriod[]).map((period) => (
+                    <option key={`${o.value}-${period}`} value={`${o.value}:${period}`}>
+                      {o.label} ·{" "}
+                      {period === "monthly"
+                        ? "Monthly"
+                        : period === "term"
+                          ? "Per term"
+                          : "Academic year"}{" "}
+                      — {formatMwk(priceFor(o.value, period))}
+                    </option>
+                  )),
+                )}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="fee">Activation / first period fee (MWK)</Label>
+              <Input
+                id="fee"
+                type="number"
+                value={activationFee}
+                onChange={(e) => setActivationFee(e.target.value)}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button type="submit" disabled={busy}>
+                {busy ? "Creating…" : "Create & generate invite"}
+              </Button>
+            </div>
+          </form>
+          {lastInviteLink && (
+            <p className="mt-3 break-all text-sm text-muted-foreground">
+              Invite link:{" "}
+              <a className="text-primary underline" href={lastInviteLink}>
+                {lastInviteLink}
+              </a>
+            </p>
+          )}
+        </section>
+      )}
+
+
       {isPlatform && (
         <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
           <h2 className="font-display text-xl">Login & contact settings</h2>
