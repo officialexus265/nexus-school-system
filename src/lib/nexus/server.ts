@@ -7486,3 +7486,179 @@ export const exportSchoolBackup = createServerFn({ method: "POST" })
       json: JSON.stringify(payload),
     };
   });
+
+
+export const bulkImportStudents = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      rows: {
+        admission_number?: string;
+        first_name: string;
+        last_name: string;
+        gender?: string;
+        class_name?: string;
+        phone?: string;
+      }[];
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "students.manage");
+    const sql = await getSql();
+    const school = await sql<{ user_id: string }>`
+      select user_id from schools where id = ${data.schoolId} limit 1
+    `;
+    const uid = school[0]?.user_id || context.userId;
+    const classes = await sql<{ id: string; name: string; stream: string | null }>`
+      select id, name, stream from classes where school_id = ${data.schoolId}
+    `;
+    function findClass(name?: string) {
+      if (!name?.trim()) return null;
+      const n = name.trim().toLowerCase();
+      const hit = classes.find(
+        (c) =>
+          c.name.toLowerCase() === n ||
+          `${c.name} ${c.stream || ""}`.trim().toLowerCase() === n ||
+          `${c.name}${c.stream || ""}`.toLowerCase() === n,
+      );
+      return hit?.id || null;
+    }
+    let created = 0;
+    let skipped = 0;
+    for (const row of data.rows) {
+      const first = (row.first_name || "").trim();
+      const last = (row.last_name || "").trim();
+      if (!first && !last) {
+        skipped += 1;
+        continue;
+      }
+      let admission = (row.admission_number || "").trim();
+      if (!admission) {
+        admission = `IMP-${Date.now().toString(36)}-${created}`;
+      }
+      const exists = await sql<{ id: string }>`
+        select id from students
+        where school_id = ${data.schoolId} and admission_number = ${admission}
+        limit 1
+      `;
+      if (exists[0]) {
+        skipped += 1;
+        continue;
+      }
+      const classId = findClass(row.class_name);
+      const id = nid(context.userId, `stu-imp-${Date.now()}-${created}`);
+      const gender = (row.gender || "U").trim().toUpperCase().slice(0, 1);
+      try {
+        await sql.query(
+          `insert into students (
+             id, user_id, school_id, first_name, last_name, admission_number,
+             gender, class_id, status
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'ACTIVE')`,
+          [id, uid, data.schoolId, first || "—", last || "—", admission, gender || "U", classId],
+        );
+        created += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+    return { ok: true, created, skipped };
+  });
+
+export const bulkImportParents = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      rows: {
+        full_name: string;
+        phone: string;
+        student_admission?: string;
+        relationship?: string;
+      }[];
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "students.manage");
+    const sql = await getSql();
+    const school = await sql<{ user_id: string }>`
+      select user_id from schools where id = ${data.schoolId} limit 1
+    `;
+    const uid = school[0]?.user_id || context.userId;
+    let created = 0;
+    let linked = 0;
+    for (const row of data.rows) {
+      const name = (row.full_name || "").trim();
+      const phone = (row.phone || "").trim();
+      if (!name || !phone) continue;
+      const parts = name.split(/\s+/);
+      const first = parts[0] || name;
+      const last = parts.slice(1).join(" ") || "—";
+      let parentId: string | null = null;
+      const existing = await sql<{ id: string }>`
+        select id from parents
+        where school_id = ${data.schoolId} and phone = ${phone}
+        limit 1
+      `.catch(() => [] as { id: string }[]);
+      if (existing[0]) {
+        parentId = existing[0].id;
+      } else {
+        parentId = nid(context.userId, `par-imp-${Date.now()}-${created}`);
+        try {
+          await sql.query(
+            `insert into parents (
+               id, user_id, school_id, first_name, last_name, phone, status
+             ) values ($1,$2,$3,$4,$5,$6,'ACTIVE')`,
+            [parentId, uid, data.schoolId, first, last, phone],
+          );
+          created += 1;
+        } catch {
+          continue;
+        }
+      }
+      const adm = (row.student_admission || "").trim();
+      if (adm && parentId) {
+        const st = await sql<{ id: string }>`
+          select id from students
+          where school_id = ${data.schoolId} and admission_number = ${adm}
+          limit 1
+        `;
+        if (st[0]) {
+          try {
+            await sql.query(
+              `insert into parent_student_links (
+                 id, school_id, parent_id, student_id, relationship
+               ) values ($1,$2,$3,$4,$5)
+               on conflict do nothing`,
+              [
+                nid(context.userId, `psl-${Date.now()}-${linked}`),
+                data.schoolId,
+                parentId,
+                st[0].id,
+                row.relationship || "Guardian",
+              ],
+            );
+            linked += 1;
+          } catch {
+            try {
+              await sql.query(
+                `insert into parent_links (id, school_id, parent_id, student_id, relationship)
+                 values ($1,$2,$3,$4,$5) on conflict do nothing`,
+                [
+                  nid(context.userId, `psl-${Date.now()}-${linked}`),
+                  data.schoolId,
+                  parentId,
+                  st[0].id,
+                  row.relationship || "Guardian",
+                ],
+              );
+              linked += 1;
+            } catch {
+              /* schema variance */
+            }
+          }
+        }
+      }
+    }
+    return { ok: true, created, linked };
+  });
