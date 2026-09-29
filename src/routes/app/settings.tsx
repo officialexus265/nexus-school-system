@@ -10,6 +10,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import {
   getSchoolSmsSettings,
+  getSchoolEmailSettings,
+  updateSchoolEmailSettings,
+  testSchoolEmailSettings,
   publishParentApp,
   registerDeviceToken,
   saveSchoolSmsSettings,
@@ -37,6 +40,17 @@ function SettingsPage() {
   const [motto, setMotto] = useState(s?.motto ?? "");
   const [phone, setPhone] = useState(s?.phone ?? "");
   const [email, setEmail] = useState(s?.email ?? "");
+  const [mailMode, setMailMode] = useState<"platform" | "smtp">("platform");
+  const [mailFromName, setMailFromName] = useState("");
+  const [mailFromEmail, setMailFromEmail] = useState("");
+  const [mailReplyTo, setMailReplyTo] = useState("");
+  const [smtpHost, setSmtpHost] = useState("smtp.gmail.com");
+  const [smtpPort, setSmtpPort] = useState("587");
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPass, setSmtpPass] = useState("");
+  const [smtpSecure, setSmtpSecure] = useState(false);
+  const [hasSmtpPass, setHasSmtpPass] = useState(false);
+
   const [busy, setBusy] = useState(false);
   const [totpEnabled, setTotpEnabled] = useState(false);
   const [totpSecret, setTotpSecret] = useState<string | null>(null);
@@ -78,6 +92,20 @@ function SettingsPage() {
 
   useEffect(() => {
     if (!s) return;
+    void getSchoolEmailSettings({ data: { schoolId: s.id } })
+      .then((r) => {
+        const x = r.settings as Record<string, unknown>;
+        setMailMode((x.mode as "platform" | "smtp") || "platform");
+        setMailFromName(String(x.from_name || s.name || ""));
+        setMailFromEmail(String(x.from_email || s.email || ""));
+        setMailReplyTo(String(x.reply_to || s.email || ""));
+        setSmtpHost(String(x.smtp_host || "smtp.gmail.com"));
+        setSmtpPort(String(x.smtp_port || 587));
+        setSmtpUser(String(x.smtp_user || ""));
+        setSmtpSecure(Boolean(x.smtp_secure));
+        setHasSmtpPass(Boolean(x.has_smtp_pass));
+      })
+      .catch(() => {});
     setMotto(s.motto ?? "");
     setPhone(s.phone ?? "");
     setEmail(s.email ?? "");
@@ -209,6 +237,144 @@ function SettingsPage() {
           >
             Save contact
           </Button>
+        </section>
+
+        <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+          <h2 className="font-display text-xl">School email (outbound)</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Staff invites and parent notices can send from your school identity. The platform always
+            remains a fallback. True “From: your@school.com” needs your mailbox SMTP (or a verified
+            domain later) — entering an email alone is not enough for providers to accept mail.
+          </p>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                checked={mailMode === "platform"}
+                onChange={() => setMailMode("platform")}
+              />
+              Use NEXUS platform mail (school name + Reply-To your address)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                checked={mailMode === "smtp"}
+                onChange={() => setMailMode("smtp")}
+              />
+              Use our school mailbox (SMTP) — Gmail App Password, Outlook, cPanel, etc.
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>From name</Label>
+                <Input value={mailFromName} onChange={(e) => setMailFromName(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>From / school email</Label>
+                <Input
+                  type="email"
+                  value={mailFromEmail}
+                  onChange={(e) => setMailFromEmail(e.target.value)}
+                  placeholder="office@yourschool.ac.mw"
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>Reply-To</Label>
+                <Input
+                  type="email"
+                  value={mailReplyTo}
+                  onChange={(e) => setMailReplyTo(e.target.value)}
+                />
+              </div>
+            </div>
+            {mailMode === "smtp" && (
+              <div className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>SMTP host</Label>
+                  <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Port</Label>
+                  <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>SMTP username</Label>
+                  <Input value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>SMTP password / App password</Label>
+                  <Input
+                    type="password"
+                    value={smtpPass}
+                    onChange={(e) => setSmtpPass(e.target.value)}
+                    placeholder={hasSmtpPass ? "Saved — leave blank to keep" : "App password"}
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={smtpSecure}
+                    onChange={(e) => setSmtpSecure(e.target.checked)}
+                  />
+                  Secure (SSL) — usually on for port 465
+                </label>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Gmail: host smtp.gmail.com, port 587, use an{" "}
+                  <strong>App Password</strong> (not your normal login). Outlook: smtp.office365.com.
+                </p>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={async () => {
+                  if (!s) return;
+                  try {
+                    await updateSchoolEmailSettings({
+                      data: {
+                        schoolId: s.id,
+                        mode: mailMode,
+                        fromName: mailFromName,
+                        fromEmail: mailFromEmail,
+                        replyTo: mailReplyTo,
+                        smtpHost: mailMode === "smtp" ? smtpHost : undefined,
+                        smtpPort: mailMode === "smtp" ? Number(smtpPort) || 587 : undefined,
+                        smtpUser: mailMode === "smtp" ? smtpUser : undefined,
+                        smtpPass: mailMode === "smtp" && smtpPass ? smtpPass : undefined,
+                        smtpSecure: mailMode === "smtp" ? smtpSecure : undefined,
+                      },
+                    });
+                    toast.success("School email settings saved");
+                    setSmtpPass("");
+                    setHasSmtpPass(mailMode === "smtp");
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Save failed");
+                  }
+                }}
+              >
+                Save email settings
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  if (!s || !mailFromEmail) {
+                    toast.error("Set from email first");
+                    return;
+                  }
+                  try {
+                    await testSchoolEmailSettings({
+                      data: { schoolId: s.id, to: mailFromEmail },
+                    });
+                    toast.success("Test email sent — check inbox/spam");
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Test failed");
+                  }
+                }}
+              >
+                Send test to school email
+              </Button>
+            </div>
+          </div>
         </section>
 
         {/* Parent App builder */}

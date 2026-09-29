@@ -5743,674 +5743,23 @@ export const inviteStaffMember = createServerFn({ method: "POST" })
     const inviteLink = `${base.replace(/\/$/, "")}/set-password?staff_token=${token}`;
 
     const school = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
-    const { sendEmail } = await import("./email");
-    const emailResult = await sendEmail({
+    const { sendEmailForSchool } = await import("./email");
+    const schoolName = school[0]?.name || "your school";
+    const mailCfg = await loadSchoolMailConfig(sql, data.schoolId);
+    const emailResult = await sendEmailForSchool(mailCfg, {
       to: email,
-      subject: `You're invited to ${school[0]?.name || "NEXUS"}`,
-      html: `<p>Hello ${fullName},</p>
-        <p>You have been invited to join <strong>${school[0]?.name || "a school"}</strong> on NEXUS as <strong>${data.roleName || "staff"}</strong>.</p>
+      subject: `You're invited to ${schoolName}`,
+      html: `
+        <p>Hello,</p>
+        <p>You have been invited to join <strong>${schoolName}</strong> on NEXUS as <strong>${data.roleName || "staff"}</strong>.</p>
         <p><a href="${inviteLink}">Set your password and join</a></p>
-        <p>This link expires in 7 days.</p>`,
-      text: `Join ${school[0]?.name}: ${inviteLink}`,
+        <p>This link expires in 7 days.</p>
+        <p style="font-size:12px;color:#666">Sent on behalf of ${schoolName}.</p>
+      `,
+      text: `You are invited to ${schoolName}. Set password: ${inviteLink}`,
+      fromName: schoolName,
     });
 
-    
-    // Class assignments for teachers
-    const classIds = data.classIds || [];
-    for (const classId of classIds) {
-      try {
-        await sql.query(
-          `insert into staff_class_assignments (staff_id, class_id, school_id)
-           values ($1,$2,$3) on conflict do nothing`,
-          [staffId, classId, data.schoolId],
-        );
-      } catch (e) {
-        console.error("[staff class assign]", e);
-      }
-    }
-
-return {
-      ok: true,
-      inviteId,
-      inviteLink,
-      emailSent: emailResult.ok,
-      emailError: emailResult.error,
-    };
-  });
-
-export const getStaffInvite = createServerFn({ method: "POST" })
-  .validator((data: { token: string }) => data)
-  .handler(async ({ data }) => {
-    const sql = await getSql();
-    const token = data.token.trim();
-    const rows = await sql<{
-      id: string;
-      school_id: string;
-      email: string;
-      full_name: string;
-      role_name: string | null;
-      role_id: string | null;
-      expires_at: string;
-      accepted_at: string | null;
-    }>`
-      select * from staff_invites where token = ${token} limit 1
-    `;
-    const inv = rows[0];
-    if (!inv) throw new Error("Invalid staff invite");
-    if (inv.accepted_at) throw new Error("Invite already used");
-    if (new Date(inv.expires_at) < new Date()) throw new Error("Invite expired");
-    const school = await sql<School>`select * from schools where id = ${inv.school_id} limit 1`;
-    return {
-      schoolId: inv.school_id,
-      schoolName: school[0]?.name || "School",
-      email: inv.email,
-      fullName: inv.full_name,
-      roleName: inv.role_name,
-    };
-  });
-
-export const completeStaffInvite = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((data: { token: string }) => data)
-  .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    const rows = await sql<{
-      id: string;
-      school_id: string;
-      email: string;
-      full_name: string;
-      role_name: string | null;
-      role_id: string | null;
-      accepted_at: string | null;
-      expires_at: string;
-    }>`
-      select * from staff_invites where token = ${data.token} limit 1
-    `;
-    const inv = rows[0];
-    if (!inv) throw new Error("Invalid invite");
-    if (inv.accepted_at) return { ok: true, schoolId: inv.school_id };
-    if (new Date(inv.expires_at) < new Date()) throw new Error("Invite expired");
-
-    await sql.query(`update staff_invites set accepted_at = now() where id = $1`, [inv.id]);
-    const mid = nid(context.userId, `mem-${inv.school_id}`);
-    await sql.query(
-      `insert into user_school_memberships (id, user_id, school_id, role, role_id, status)
-       values ($1,$2,$3,$4,$5,'ACTIVE')
-       on conflict (user_id, school_id) do update set role = $4, role_id = $5, status = 'ACTIVE'`,
-      [mid, context.userId, inv.school_id, inv.role_name || "teacher", inv.role_id],
-    );
-    return { ok: true, schoolId: inv.school_id };
-  });
-
-export const bulkImportStudents = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(
-    (data: {
-      schoolId: string;
-      rows: {
-        admission_number: string;
-        first_name: string;
-        last_name: string;
-        gender?: string;
-        class_name?: string;
-        phone?: string;
-      }[];
-    }) => data,
-  )
-  .handler(async ({ context, data }) => {
-    await requirePermission(context.userId, data.schoolId, "students.manage");
-    const sql = await getSql();
-    const classes = await sql<ClassRow>`
-      select * from classes where school_id = ${data.schoolId}
-    `;
-    let created = 0;
-    let skipped = 0;
-    for (const row of data.rows) {
-      const adm = (row.admission_number || "").trim();
-      const fn = (row.first_name || "").trim();
-      const ln = (row.last_name || "").trim();
-      if (!adm || !fn || !ln) {
-        skipped += 1;
-        continue;
-      }
-      const exists = await sql<{ id: string }>`
-        select id from students where school_id = ${data.schoolId} and admission_number = ${adm} limit 1
-      `;
-      if (exists[0]) {
-        skipped += 1;
-        continue;
-      }
-      let classId: string | null = null;
-      if (row.class_name) {
-        const cn = row.class_name.trim().toLowerCase();
-        const match = classes.find(
-          (c) =>
-            `${c.section} ${c.name}${c.stream ? " " + c.stream : ""}`.toLowerCase().includes(cn) ||
-            c.name.toLowerCase() === cn,
-        );
-        classId = match?.id || null;
-      }
-      const id = nid(context.userId, `stu-${adm}-${Date.now()}-${created}`);
-      await sql.query(
-        `insert into students (id, user_id, school_id, admission_number, first_name, last_name, gender, class_id, phone, status)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE')`,
-        [
-          id,
-          context.userId,
-          data.schoolId,
-          adm,
-          fn,
-          ln,
-          row.gender || null,
-          classId,
-          row.phone || null,
-        ],
-      );
-      created += 1;
-    }
-    return { created, skipped, total: data.rows.length };
-  });
-
-export const bulkImportParents = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(
-    (data: {
-      schoolId: string;
-      rows: {
-        full_name: string;
-        phone: string;
-        student_admission?: string;
-        relationship?: string;
-      }[];
-    }) => data,
-  )
-  .handler(async ({ context, data }) => {
-    await requirePermission(context.userId, data.schoolId, "parents.manage");
-    const sql = await getSql();
-    let created = 0;
-    let linked = 0;
-    let skipped = 0;
-    for (const row of data.rows) {
-      const name = (row.full_name || "").trim();
-      const phone = (row.phone || "").trim();
-      if (!name || !phone) {
-        skipped += 1;
-        continue;
-      }
-      let parentId: string;
-      const existing = await sql<{ id: string }>`
-        select id from parents where school_id = ${data.schoolId} and phone = ${phone} limit 1
-      `;
-      if (existing[0]) {
-        parentId = existing[0].id;
-      } else {
-        parentId = nid(context.userId, `par-${Date.now()}-${created}`);
-        await sql.query(
-          `insert into parents (id, user_id, school_id, full_name, phone, sms_only)
-           values ($1,$2,$3,$4,$5,true)`,
-          [parentId, context.userId, data.schoolId, name, phone],
-        );
-        created += 1;
-      }
-      if (row.student_admission) {
-        const st = await sql<{ id: string }>`
-          select id from students
-          where school_id = ${data.schoolId} and admission_number = ${row.student_admission.trim()}
-          limit 1
-        `;
-        if (st[0]) {
-          const lid = nid(context.userId, `ps-${parentId}-${st[0].id}`);
-          try {
-            await sql.query(
-              `insert into parent_students (id, user_id, parent_id, student_id, relationship)
-               values ($1,$2,$3,$4,$5)
-               on conflict do nothing`,
-              [lid, context.userId, parentId, st[0].id, row.relationship || "Guardian"],
-            );
-            linked += 1;
-          } catch {
-            /* */
-          }
-        }
-      }
-    }
-    return { created, linked, skipped, total: data.rows.length };
-  });
-
-export const getPlatformHealth = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const platform = await isPlatformOwner(context.userId);
-    if (!platform) throw new Error("Platform owner only");
-    const sql = await getSql();
-    const schools = await sql<{ c: number }>`select count(*)::int as c from schools`;
-    const active = await sql<{ c: number }>`
-      select count(*)::int as c from schools where status = 'ACTIVE'
-    `;
-    const invoices = await sql<{ c: number }>`
-      select count(*)::int as c from platform_invoices where status in ('SENT','OVERDUE','DRAFT')
-    `;
-    const envChecks = {
-      DATABASE_URL: Boolean(process.env.DATABASE_URL),
-      BETTER_AUTH_URL: Boolean(process.env.BETTER_AUTH_URL || process.env.VITE_APP_URL),
-      BETTER_AUTH_SECRET: Boolean(process.env.BETTER_AUTH_SECRET),
-      RESEND_API_KEY: Boolean(process.env.RESEND_API_KEY),
-      PAYCHANGU_SECRET_KEY: Boolean(process.env.PAYCHANGU_SECRET_KEY),
-      PAYCHANGU_WEBHOOK_SECRET: Boolean(process.env.PAYCHANGU_WEBHOOK_SECRET),
-      FCM_SERVER_KEY: Boolean(process.env.FCM_SERVER_KEY || process.env.FIREBASE_SERVER_KEY),
-      CRON_SECRET: Boolean(process.env.CRON_SECRET),
-      PLATFORM_HTTPSMS_API_KEY: Boolean(process.env.PLATFORM_HTTPSMS_API_KEY),
-    };
-    const overdue = await sql<{ c: number }>`
-      select count(*)::int as c from platform_invoices where status = 'OVERDUE'
-    `;
-    const pendingPay = await sql<{ c: number }>`
-      select count(*)::int as c from schools where status = 'PENDING_PAYMENT'
-    `;
-    const grace = await sql<{ c: number }>`
-      select count(*)::int as c from schools where status = 'GRACE_PERIOD'
-    `;
-    let jobsPending = 0;
-    try {
-      const j = await sql<{ c: number }>`
-        select count(*)::int as c from background_jobs where status = 'PENDING'
-      `;
-      jobsPending = j[0]?.c ?? 0;
-    } catch {
-      /* */
-    }
-    let sms7d = 0;
-    try {
-      const sm = await sql<{ c: number }>`
-        select count(*)::int as c from sms_logs where created_at > now() - interval '7 days'
-      `;
-      sms7d = sm[0]?.c ?? 0;
-    } catch {
-      /* */
-    }
-
-    const checks = [
-      {
-        id: "db",
-        label: "Database",
-        status: envChecks.DATABASE_URL ? "ok" : "warn",
-        detail: envChecks.DATABASE_URL ? "DATABASE_URL set" : "Using PGLite / no DATABASE_URL",
-      },
-      {
-        id: "auth",
-        label: "Auth URL + secret",
-        status: envChecks.BETTER_AUTH_URL && envChecks.BETTER_AUTH_SECRET ? "ok" : "warn",
-        detail: "Needed for sessions and invite links",
-      },
-      {
-        id: "email",
-        label: "Resend email",
-        status: envChecks.RESEND_API_KEY ? "ok" : "warn",
-        detail: envChecks.RESEND_API_KEY ? "Configured" : "Invites log to console only",
-      },
-      {
-        id: "pay",
-        label: "PayChangu",
-        status: envChecks.PAYCHANGU_SECRET_KEY ? "ok" : "warn",
-        detail: envChecks.PAYCHANGU_SECRET_KEY ? "Configured" : "Not configured — online pay disabled",
-      },
-      {
-        id: "cron",
-        label: "Cron secret",
-        status: envChecks.CRON_SECRET ? "ok" : "fail",
-        detail: envChecks.CRON_SECRET
-          ? "Set — schedule /api/cron?job=all"
-          : "Set CRON_SECRET before production cron",
-      },
-      {
-        id: "sms_platform",
-        label: "Platform httpSMS",
-        status: envChecks.PLATFORM_HTTPSMS_API_KEY ? "ok" : "warn",
-        detail: "Used for invoice SMS to schools",
-      },
-    ];
-
-    return {
-      schools: schools[0]?.c ?? 0,
-      activeSchools: active[0]?.c ?? 0,
-      openInvoices: invoices[0]?.c ?? 0,
-      overdueInvoices: overdue[0]?.c ?? 0,
-      pendingPaymentSchools: pendingPay[0]?.c ?? 0,
-      graceSchools: grace[0]?.c ?? 0,
-      jobsPending,
-      sms7d,
-      env: envChecks,
-      checks,
-      cronHint:
-        "Schedule: curl -H \"Authorization: Bearer $CRON_SECRET\" \"https://YOUR_DOMAIN/api/cron?job=all\"",
-    };
-  });
-
-/** School-side operational health (for the school owner). */
-export const getSchoolHealth = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((data: { schoolId: string }) => data)
-  .handler(async ({ context, data }) => {
-    await requireSchoolAccess(context.userId, data.schoolId);
-    const sql = await getSql();
-    const schools = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
-    const school = schools[0];
-    if (!school) throw new Error("School not found");
-
-    let smsConfigured = false;
-    let smsEnabled = false;
-    let smsFrom: string | null = null;
-    try {
-      const sms = await sql<{
-        api_key: string | null;
-        from_number: string | null;
-        enabled: boolean;
-      }>`
-        select api_key, from_number, enabled from school_sms_settings
-        where school_id = ${data.schoolId} limit 1
-      `;
-      smsConfigured = Boolean(sms[0]?.api_key);
-      smsEnabled = Boolean(sms[0]?.enabled);
-      smsFrom = sms[0]?.from_number || null;
-    } catch {
-      /* */
-    }
-
-    const students = await sql<{ c: number }>`
-      select count(*)::int as c from students where school_id = ${data.schoolId}
-    `;
-    const parents = await sql<{ c: number }>`
-      select count(*)::int as c from parents where school_id = ${data.schoolId}
-    `;
-    const staff = await sql<{ c: number }>`
-      select count(*)::int as c from staff where school_id = ${data.schoolId}
-    `;
-    const openCharges = await sql<{ c: number }>`
-      select count(*)::int as c from student_charges
-      where school_id = ${data.schoolId} and status in ('DUE','PARTIAL','OVERDUE','UNPAID')
-    `;
-    let recentSms = 0;
-    try {
-      const r = await sql<{ c: number }>`
-        select count(*)::int as c from sms_logs
-        where school_id = ${data.schoolId}
-          and created_at > now() - interval '7 days'
-      `;
-      recentSms = r[0]?.c ?? 0;
-    } catch {
-      /* */
-    }
-
-    const parentAppPublished = Boolean(school.parent_app_slug && school.parent_app_name);
-    const base =
-      process.env.BETTER_AUTH_URL ||
-      process.env.VITE_APP_URL ||
-      "";
-    const parentAppUrl = parentAppPublished
-      ? `${(base || "").replace(/\/$/, "")}/p/${school.parent_app_slug}`
-      : null;
-
-    const checks: {
-      id: string;
-      label: string;
-      status: "ok" | "warn" | "fail";
-      detail: string;
-    }[] = [
-      {
-        id: "school_status",
-        label: "School account status",
-        status:
-          school.status === "ACTIVE"
-            ? "ok"
-            : school.status === "GRACE_PERIOD" || school.status === "PENDING_PAYMENT"
-              ? "warn"
-              : "fail",
-        detail: school.status || "unknown",
-      },
-      {
-        id: "parent_app",
-        label: "Parent app published",
-        status: parentAppPublished ? "ok" : "warn",
-        detail: parentAppPublished
-          ? `Slug: ${school.parent_app_slug}`
-          : "Publish under School settings → Parent app",
-      },
-      {
-        id: "sms",
-        label: "httpSMS gateway",
-        status: smsConfigured && smsEnabled ? "ok" : smsConfigured ? "warn" : "fail",
-        detail: smsConfigured
-          ? smsEnabled
-            ? `Enabled${smsFrom ? ` · from ${smsFrom}` : ""}`
-            : "Credentials saved but disabled"
-          : "Add httpSMS API key in School settings",
-      },
-      {
-        id: "branding",
-        label: "Branding",
-        status: school.primary_color && school.logo_mark ? "ok" : "warn",
-        detail:
-          school.primary_color || school.logo_mark
-            ? `Mark ${school.logo_mark || "—"} · ${school.primary_color || "default colour"}`
-            : "Set colours and logo mark for the parent app",
-      },
-      {
-        id: "roster",
-        label: "Students enrolled",
-        status: (students[0]?.c ?? 0) > 0 ? "ok" : "warn",
-        detail: `${students[0]?.c ?? 0} student(s)`,
-      },
-      {
-        id: "parents",
-        label: "Parents registered",
-        status: (parents[0]?.c ?? 0) > 0 ? "ok" : "warn",
-        detail: `${parents[0]?.c ?? 0} parent(s)`,
-      },
-      {
-        id: "staff",
-        label: "Staff directory",
-        status: (staff[0]?.c ?? 0) > 0 ? "ok" : "warn",
-        detail: `${staff[0]?.c ?? 0} staff record(s)`,
-      },
-      {
-        id: "fees_open",
-        label: "Open fee charges",
-        status: "ok",
-        detail: `${openCharges[0]?.c ?? 0} open charge(s)`,
-      },
-      {
-        id: "sms_traffic",
-        label: "SMS last 7 days",
-        status: recentSms > 0 ? "ok" : "warn",
-        detail: `${recentSms} message(s) logged`,
-      },
-    ];
-
-    const ok = checks.filter((c) => c.status === "ok").length;
-    const warn = checks.filter((c) => c.status === "warn").length;
-    const fail = checks.filter((c) => c.status === "fail").length;
-
-    return {
-      schoolName: school.name,
-      status: school.status,
-      parentAppUrl,
-      counts: {
-        students: students[0]?.c ?? 0,
-        parents: parents[0]?.c ?? 0,
-        staff: staff[0]?.c ?? 0,
-        openCharges: openCharges[0]?.c ?? 0,
-        sms7d: recentSms,
-      },
-      checks,
-      summary: { ok, warn, fail },
-    };
-  });
-
-// ---------------------------------------------------------------------------
-// Full ops: backup/export, support tools, suspension gate, reconcile
-// ---------------------------------------------------------------------------
-
-/** Full school data export (JSON) — answer to "what if data is lost?" */
-export const exportSchoolBackup = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((data: { schoolId: string }) => data)
-  .handler(async ({ context, data }) => {
-    await requireSchoolAccess(context.userId, data.schoolId);
-    const sql = await getSql();
-    const school = await sql`select * from schools where id = ${data.schoolId} limit 1`;
-    if (!school[0]) throw new Error("School not found");
-
-    const tables: Record<string, unknown> = {};
-    const names = [
-      "staff",
-      "classes",
-      "subjects",
-      "teacher_assignments",
-      "students",
-      "parents",
-      "parent_students",
-      "academic_years",
-      "terms",
-      "assessments",
-      "assessment_scores",
-      "result_submissions",
-      "student_results",
-      "attendance",
-      "behaviour_records",
-      "fee_structures",
-      "student_charges",
-      "payments",
-      "announcements",
-      "notifications",
-      "calendar_events",
-      "documents",
-      "messages",
-      "admission_applications",
-      "grading_scales",
-      "examinations",
-      "user_school_memberships",
-      "school_sms_settings",
-      "parent_app_settings",
-      "sms_logs",
-      "payment_intents",
-      "audit_logs",
-    ];
-    for (const name of names) {
-      try {
-        const rows = await sql.query(`select * from ${name} where school_id = $1`, [
-          data.schoolId,
-        ]);
-        tables[name] = rows;
-      } catch {
-        tables[name] = [];
-      }
-    }
-    // parent_students may not have school_id
-    try {
-      tables.parent_students = await sql`
-        select ps.* from parent_students ps
-        inner join parents p on p.id = ps.parent_id
-        where p.school_id = ${data.schoolId}
-      `;
-    } catch {
-      /* */
-    }
-
-    return {
-      exportedAt: new Date().toISOString(),
-      format: "nexus-school-backup-v1",
-      school: school[0],
-      tables,
-      note: "Store this file securely. Neon also provides point-in-time recovery on paid plans. Re-import is a support procedure.",
-    };
-  });
-
-export const listSchoolAudit = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((data: { schoolId: string; limit?: number }) => data)
-  .handler(async ({ context, data }) => {
-    await requirePermission(context.userId, data.schoolId, "audit_logs.view");
-    const sql = await getSql();
-    const limit = Math.min(data.limit || 100, 500);
-    try {
-      const rows = await sql`
-        select * from audit_logs
-        where school_id = ${data.schoolId}
-        order by created_at desc
-        limit ${limit}
-      `;
-      return { rows };
-    } catch {
-      return { rows: [] };
-    }
-  });
-
-export const listPlatformSupport = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const platform = await isPlatformOwner(context.userId);
-    if (!platform) throw new Error("Platform owner only");
-    const sql = await getSql();
-    let sms: unknown[] = [];
-    let payments: unknown[] = [];
-    let jobs: unknown[] = [];
-    try {
-      sms = await sql`
-        select id, school_id, phone, event, status, created_at
-        from sms_logs order by created_at desc limit 50
-      `;
-    } catch {
-      /* */
-    }
-    try {
-      payments = await sql`
-        select id, school_id, purpose, amount, status, tx_ref, channel, created_at
-        from payment_intents order by created_at desc limit 50
-      `;
-    } catch {
-      /* */
-    }
-    try {
-      jobs = await sql`
-        select id, school_id, job_type, status, attempts, last_error, scheduled_for, created_at
-        from background_jobs order by created_at desc limit 50
-      `;
-    } catch {
-      /* */
-    }
-    return { sms, payments, jobs };
-  });
-
-export const resendSchoolInvite = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((data: { schoolId: string }) => data)
-  .handler(async ({ context, data }) => {
-    const platform = await isPlatformOwner(context.userId);
-    if (!platform) throw new Error("Platform owner only");
-    const sql = await getSql();
-    const schools = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
-    const school = schools[0];
-    if (!school) throw new Error("School not found");
-    if (!school.owner_email) throw new Error("No owner email on school");
-
-    const token = randomToken(32);
-    const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await sql.query(
-      `update schools set invite_token = $1, invite_expires_at = $2, password_set_at = null where id = $3`,
-      [token, expires.toISOString(), school.id],
-    );
-    const base =
-      process.env.BETTER_AUTH_URL ||
-      process.env.VITE_APP_URL ||
-      "http://localhost:8080";
-    const inviteLink = `${base.replace(/\/$/, "")}/set-password?token=${token}`;
-    const { sendEmail } = await import("./email");
-    const emailResult = await sendEmail({
-      to: school.owner_email,
-      subject: `NEXUS invite (resent) — ${school.name}`,
-      html: `<p>Your invite link was renewed.</p><p><a href="${inviteLink}">Set password</a></p>`,
-      text: inviteLink,
-    });
     return { ok: true, inviteLink, emailSent: emailResult.ok };
   });
 
@@ -7506,3 +6855,186 @@ export const moveStudentsToClass = createServerFn({ method: "POST" })
     }
     return { ok: true, moved: n };
   });
+
+
+export const getSchoolEmailSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    try {
+      const rows = await sql<Record<string, unknown>>`
+        select school_id, from_name, from_email, reply_to, mode,
+               smtp_host, smtp_port, smtp_user, smtp_secure,
+               verified_at, last_test_at, last_test_ok, last_test_error,
+               case when smtp_pass is not null and smtp_pass <> '' then true else false end as has_smtp_pass
+        from school_email_settings where school_id = ${data.schoolId} limit 1
+      `;
+      if (rows[0]) return { settings: rows[0] };
+    } catch {
+      /* table missing */
+    }
+    const school = await sql<{ name: string; email: string | null }>`
+      select name, email from schools where id = ${data.schoolId} limit 1
+    `;
+    return {
+      settings: {
+        school_id: data.schoolId,
+        from_name: school[0]?.name || "",
+        from_email: school[0]?.email || "",
+        reply_to: school[0]?.email || "",
+        mode: "platform",
+        smtp_host: "",
+        smtp_port: 587,
+        smtp_user: "",
+        smtp_secure: false,
+        has_smtp_pass: false,
+      },
+    };
+  });
+
+export const updateSchoolEmailSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      mode?: "platform" | "smtp";
+      fromName?: string;
+      fromEmail?: string;
+      replyTo?: string;
+      smtpHost?: string;
+      smtpPort?: number;
+      smtpUser?: string;
+      smtpPass?: string;
+      smtpSecure?: boolean;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const existing = await sql<{ smtp_pass: string | null }>`
+      select smtp_pass from school_email_settings where school_id = ${data.schoolId} limit 1
+    `.catch(() => [] as { smtp_pass: string | null }[]);
+    const pass =
+      data.smtpPass && data.smtpPass.trim()
+        ? data.smtpPass.trim()
+        : existing[0]?.smtp_pass || null;
+    await sql.query(
+      `insert into school_email_settings (
+         school_id, from_name, from_email, reply_to, mode,
+         smtp_host, smtp_port, smtp_user, smtp_pass, smtp_secure, updated_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+       on conflict (school_id) do update set
+         from_name = coalesce($2, school_email_settings.from_name),
+         from_email = coalesce($3, school_email_settings.from_email),
+         reply_to = coalesce($4, school_email_settings.reply_to),
+         mode = coalesce($5, school_email_settings.mode),
+         smtp_host = coalesce($6, school_email_settings.smtp_host),
+         smtp_port = coalesce($7, school_email_settings.smtp_port),
+         smtp_user = coalesce($8, school_email_settings.smtp_user),
+         smtp_pass = coalesce($9, school_email_settings.smtp_pass),
+         smtp_secure = coalesce($10, school_email_settings.smtp_secure),
+         updated_at = now()`,
+      [
+        data.schoolId,
+        data.fromName ?? null,
+        data.fromEmail ?? null,
+        data.replyTo ?? null,
+        data.mode ?? "platform",
+        data.smtpHost ?? null,
+        data.smtpPort ?? 587,
+        data.smtpUser ?? null,
+        pass,
+        data.smtpSecure ?? false,
+      ],
+    );
+    // Keep schools.email in sync when from_email set
+    if (data.fromEmail?.includes("@")) {
+      await sql.query(`update schools set email = $1 where id = $2`, [
+        data.fromEmail.trim(),
+        data.schoolId,
+      ]);
+    }
+    return { ok: true };
+  });
+
+export const testSchoolEmailSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; to: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const rows = await sql<Record<string, unknown>>`
+      select * from school_email_settings where school_id = ${data.schoolId} limit 1
+    `;
+    const row = rows[0];
+    const { sendEmailForSchool } = await import("./email");
+    const result = await sendEmailForSchool(
+      row
+        ? {
+            fromName: String(row.from_name || ""),
+            fromEmail: String(row.from_email || ""),
+            replyTo: String(row.reply_to || ""),
+            mode: String(row.mode || "platform"),
+            smtpHost: row.smtp_host ? String(row.smtp_host) : null,
+            smtpPort: row.smtp_port != null ? Number(row.smtp_port) : 587,
+            smtpUser: row.smtp_user ? String(row.smtp_user) : null,
+            smtpPass: row.smtp_pass ? String(row.smtp_pass) : null,
+            smtpSecure: Boolean(row.smtp_secure),
+          }
+        : null,
+      {
+        to: data.to,
+        subject: "NEXUS test email from your school",
+        html: "<p>This is a test message from your school mail settings on NEXUS.</p>",
+        text: "NEXUS school mail test",
+      },
+    );
+    try {
+      await sql.query(
+        `update school_email_settings set last_test_at = now(), last_test_ok = $2, last_test_error = $3 where school_id = $1`,
+        [data.schoolId, result.ok, result.error || null],
+      );
+    } catch {
+      /* ignore */
+    }
+    if (!result.ok) throw new Error(result.error || "Test send failed");
+    return result;
+  });
+
+async function loadSchoolMailConfig(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  schoolId: string,
+) {
+  try {
+    const rows = await sql<Record<string, unknown>>`
+      select * from school_email_settings where school_id = ${schoolId} limit 1
+    `;
+    const row = rows[0];
+    if (!row) {
+      const school = await sql<{ name: string; email: string | null }>`
+        select name, email from schools where id = ${schoolId} limit 1
+      `;
+      return {
+        fromName: school[0]?.name,
+        fromEmail: school[0]?.email,
+        replyTo: school[0]?.email,
+        mode: "platform",
+      };
+    }
+    return {
+      fromName: row.from_name ? String(row.from_name) : null,
+      fromEmail: row.from_email ? String(row.from_email) : null,
+      replyTo: row.reply_to ? String(row.reply_to) : null,
+      mode: String(row.mode || "platform"),
+      smtpHost: row.smtp_host ? String(row.smtp_host) : null,
+      smtpPort: row.smtp_port != null ? Number(row.smtp_port) : 587,
+      smtpUser: row.smtp_user ? String(row.smtp_user) : null,
+      smtpPass: row.smtp_pass ? String(row.smtp_pass) : null,
+      smtpSecure: Boolean(row.smtp_secure),
+    };
+  } catch {
+    return null;
+  }
+}
