@@ -6749,7 +6749,7 @@ export const updateSchoolAccountRequest = createServerFn({ method: "POST" })
   .validator(
     (data: {
       requestId: string;
-      status: "PENDING" | "CONTACTED" | "APPROVED" | "REJECTED";
+      status: "PENDING" | "CONTACTED" | "APPROVED" | "REJECTED" | "CONVERTED";
       notes?: string;
     }) => data,
   )
