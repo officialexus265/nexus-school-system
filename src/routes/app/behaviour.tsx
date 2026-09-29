@@ -242,19 +242,12 @@ function RecordIncident({
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label>Student</Label>
-            <Select value={studentId} onValueChange={setStudent}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {students.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.first_name} {s.last_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                        <Label>Student</Label>
+            <StudentTypeahead
+              students={students}
+              value={studentId}
+              onChange={setStudent}
+            />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -314,5 +307,75 @@ function RecordIncident({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+function StudentTypeahead({
+  students,
+  value,
+  onChange,
+}: {
+  students: { id: string; first_name: string; last_name: string; admission_number?: string }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const selected = students.find((s) => s.id === value);
+  const [text, setText] = useState(
+    selected ? `${selected.first_name} ${selected.last_name}` : "",
+  );
+  const [open, setOpen] = useState(false);
+  const q = text.trim().toLowerCase();
+  const matches = students
+    .filter((s) => {
+      if (!q) return true;
+      const blob = `${s.first_name} ${s.last_name} ${s.admission_number || ""}`.toLowerCase();
+      return blob.includes(q);
+    })
+    .slice(0, 12);
+
+  return (
+    <div className="relative">
+      <Input
+        value={text}
+        placeholder="Type a name…"
+        onChange={(e) => {
+          setText(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // delay so click on option registers
+          setTimeout(() => setOpen(false), 150);
+        }}
+      />
+      {open && (
+        <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-md border border-border bg-card shadow-md">
+          {matches.length === 0 ? (
+            <li className="px-3 py-2 text-xs text-muted-foreground">No match</li>
+          ) : (
+            matches.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 text-left text-sm hover:bg-secondary"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange(s.id);
+                    setText(`${s.first_name} ${s.last_name}`);
+                    setOpen(false);
+                  }}
+                >
+                  {s.first_name} {s.last_name}
+                  {s.admission_number ? (
+                    <span className="text-xs text-muted-foreground"> · {s.admission_number}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </div>
   );
 }

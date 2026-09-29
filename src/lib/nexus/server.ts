@@ -5650,6 +5650,7 @@ export const inviteStaffMember = createServerFn({ method: "POST" })
       roleName?: string;
       roleId?: string;
       title?: string;
+      classIds?: string[];
     }) => data,
   )
   .handler(async ({ context, data }) => {
@@ -5753,7 +5754,22 @@ export const inviteStaffMember = createServerFn({ method: "POST" })
       text: `Join ${school[0]?.name}: ${inviteLink}`,
     });
 
-    return {
+    
+    // Class assignments for teachers
+    const classIds = data.classIds || [];
+    for (const classId of classIds) {
+      try {
+        await sql.query(
+          `insert into staff_class_assignments (staff_id, class_id, school_id)
+           values ($1,$2,$3) on conflict do nothing`,
+          [staffId, classId, data.schoolId],
+        );
+      } catch (e) {
+        console.error("[staff class assign]", e);
+      }
+    }
+
+return {
       ok: true,
       inviteId,
       inviteLink,
@@ -7330,3 +7346,55 @@ export async function computeBehaviourScore(
     onWatchList: score <= weed,
   };
 }
+
+
+export const setStaffClasses = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; staffId: string; classIds: string[] }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "staff.manage");
+    const sql = await getSql();
+    await sql.query(`delete from staff_class_assignments where staff_id = $1`, [data.staffId]);
+    for (const classId of data.classIds) {
+      await sql.query(
+        `insert into staff_class_assignments (staff_id, class_id, school_id)
+         values ($1,$2,$3) on conflict do nothing`,
+        [data.staffId, classId, data.schoolId],
+      );
+    }
+    return { ok: true };
+  });
+
+export const listMyTeachingClasses = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    // Platform/owner: all classes
+    const isOwner = await isPlatformOwner(context.userId).catch(() => false);
+    const membership = await sql<{ role: string }>`
+      select role from school_memberships
+      where user_id = ${context.userId} and school_id = ${data.schoolId} limit 1
+    `;
+    const role = (membership[0]?.role || "").toLowerCase();
+    if (isOwner || role === "owner" || role === "admin" || role === "head") {
+      const all = await sql<{ id: string }>`
+        select id from classes where school_id = ${data.schoolId}
+      `;
+      return { classIds: all.map((c) => c.id), scope: "all" as const };
+    }
+    // Match staff row by email
+    const user = await sql<{ email: string }>`
+      select email from "user" where id = ${context.userId} limit 1
+    `;
+    const email = user[0]?.email;
+    if (!email) return { classIds: [] as string[], scope: "teacher" as const };
+    const staff = await sql<{ id: string }>`
+      select id from staff where school_id = ${data.schoolId} and lower(email) = ${email.toLowerCase()} limit 1
+    `;
+    if (!staff[0]) return { classIds: [] as string[], scope: "teacher" as const };
+    const rows = await sql<{ class_id: string }>`
+      select class_id from staff_class_assignments where staff_id = ${staff[0].id}
+    `;
+    return { classIds: rows.map((r) => r.class_id), scope: "teacher" as const };
+  });

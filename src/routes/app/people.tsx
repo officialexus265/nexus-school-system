@@ -236,7 +236,7 @@ function PeoplePage() {
           <TabsTrigger value="parents">Parents</TabsTrigger>
         </TabsList>
         <TabsContent value="staff">
-          <StaffInvite schoolId={snap.school.id} onDone={() => void invalidate()} />
+          <StaffInvite schoolId={snap.school.id} classes={snap.classes} onDone={() => void invalidate()} />
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {snap.staff.map((s) => {
               const taught = snap.assignments.filter((a) => a.staff_id === s.id);
@@ -405,11 +405,21 @@ function PeoplePage() {
 }
 
 
-function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => void }) {
+function StaffInvite({
+  schoolId,
+  classes,
+  onDone,
+}: {
+  schoolId: string;
+  classes: { id: string; name: string; stream: string | null }[];
+  onDone: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [roleName, setRoleName] = useState("teacher");
+  const [inviteClassIds, setInviteClassIds] = useState<string[]>([]);
+
   const [roleId, setRoleId] = useState("");
   const [roles, setRoles] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -444,12 +454,14 @@ function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => voi
                   email,
                   roleName: roleId ? roles.find((x) => x.id === roleId)?.name || roleName : roleName,
                   roleId: roleId || undefined,
+                  classIds: inviteClassIds,
                 },
               });
               setLink(r.inviteLink);
               toast.success(r.emailSent ? "Invite email sent" : "Invite created — copy link");
               setFullName("");
               setEmail("");
+              setInviteClassIds([]);
               onDone();
             } catch (err) {
               toast.error(err instanceof Error ? err.message : "Failed");
@@ -500,6 +512,37 @@ function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => voi
               ))}
             </select>
           </div>
+          {(roleName === "teacher" || roleName === "head") && (
+            <div className="sm:col-span-2 space-y-2">
+              <Label>Classes this teacher teaches</Label>
+              <p className="text-xs text-muted-foreground">
+                Teachers assigned to the same class share one register. If one marks attendance,
+                the others see it for those students.
+              </p>
+              <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto rounded-md border border-border p-2">
+                {classes.map((c) => (
+                  <label
+                    key={c.id}
+                    className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={inviteClassIds.includes(c.id)}
+                      onChange={() =>
+                        setInviteClassIds((prev) =>
+                          prev.includes(c.id)
+                            ? prev.filter((id) => id !== c.id)
+                            : [...prev, c.id],
+                        )
+                      }
+                    />
+                    {c.name}
+                    {c.stream ? ` ${c.stream}` : ""}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <Button type="submit" disabled={busy} className="sm:col-span-2">
             {busy ? "Sending…" : "Send staff invite"}
           </Button>

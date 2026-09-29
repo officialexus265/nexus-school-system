@@ -5,7 +5,8 @@ import { StatusPill } from "@/components/status-pill";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
-import { markAttendance } from "@/lib/nexus/server";
+import { listMyTeachingClasses, markAttendance } from "@/lib/nexus/server";
+import { useEffect, useState } from "react";
 import { enqueueOffline, isBrowserOffline } from "@/lib/offline/queue";
 import {
   attendanceRate,
@@ -78,9 +79,34 @@ function AttendancePage() {
     );
   }
 
-  const f2a = snap.classes.find((c) => c.name === "Form 2" && c.stream === "A");
-  const classId = f2a?.id ?? snap.classes[0]?.id;
-  const roster = snap.students.filter((s) => s.class_id === classId);
+  const [allowedClassIds, setAllowedClassIds] = useState<string[] | null>(null);
+  const [classId, setClassId] = useState<string>("");
+  const personaRole = persona;
+
+  useEffect(() => {
+    void listMyTeachingClasses({ data: { schoolId: snap.school.id } })
+      .then((r) => {
+        setAllowedClassIds(r.classIds);
+        if (r.classIds.length && !classId) setClassId(r.classIds[0]!);
+        else if (r.scope === "all" && snap.classes[0] && !classId) {
+          setClassId(snap.classes[0].id);
+        }
+      })
+      .catch(() => {
+        setAllowedClassIds(snap.classes.map((c) => c.id));
+        if (snap.classes[0]) setClassId(snap.classes[0].id);
+      });
+  }, [snap.school.id]);
+
+  const selectable =
+    allowedClassIds === null
+      ? snap.classes
+      : allowedClassIds.length === 0 && (personaRole === "owner" || personaRole === "head")
+        ? snap.classes
+        : snap.classes.filter((c) => (allowedClassIds || []).includes(c.id));
+
+  const activeClassId = classId || selectable[0]?.id;
+  const roster = snap.students.filter((s) => s.class_id === activeClassId);
 
   async function setStatus(student: Student, status: AttendanceStatus) {
     const payload = {
@@ -120,43 +146,74 @@ function AttendancePage() {
     <div>
       <PageHeader
         kicker="Register"
-        title={`${classLabel(classById(snap, classId))} · today`}
-        description="Changing a mark writes the register immediately. Offline marks are queued on this device."
+        title={`${activeClassId ? classLabel(classById(snap, activeClassId)) : "Select class"} · today`}
+        description={
+          personaRole === "teacher"
+            ? "Your assigned classes only. Marks are shared with every teacher of the same class."
+            : "Class register is shared: any teacher of this class sees the same marks. Assign classes when inviting teachers."
+        }
       />
-      <div className="space-y-2">
-        {roster.map((s) => {
-          const row = snap.attendance.find((a) => a.student_id === s.id && a.date === date);
-          return (
-            <div
-              key={s.id}
-              className="flex flex-col gap-3 rounded-xl bg-card p-4 shadow-[var(--shadow-border)] sm:flex-row sm:items-center sm:justify-between"
+      <div className="mb-4 flex flex-wrap gap-2">
+        {selectable.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No classes assigned to you yet. Ask the school owner to assign classes on your staff
+            profile.
+          </p>
+        ) : (
+          selectable.map((c) => (
+            <Button
+              key={c.id}
+              size="sm"
+              variant={c.id === activeClassId ? "default" : "outline"}
+              onClick={() => setClassId(c.id)}
             >
-              <div>
-                <p className="font-medium">{nameOf(s)}</p>
-                <p className="text-xs text-muted-foreground">{s.admission_number}</p>
+              {classLabel(c)}
+            </Button>
+          ))
+        )}
+      </div>
+      <div className="space-y-2">
+        {roster.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No students in this class.</p>
+        ) : (
+          roster.map((s) => {
+            const row = snap.attendance.find((a) => a.student_id === s.id && a.date === date);
+            return (
+              <div
+                key={s.id}
+                className="flex flex-col gap-3 rounded-xl bg-card p-4 shadow-[var(--shadow-border)] sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div>
+                  <p className="font-medium">{nameOf(s)}</p>
+                  <p className="text-xs text-muted-foreground">{s.admission_number}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {STATUSES.map((st) => (
+                    <Button
+                      key={st}
+                      size="sm"
+                      variant={row?.status === st ? "default" : "outline"}
+                      onClick={() => setStatus(s, st)}
+                    >
+                      {st.slice(0, 1) + st.slice(1).toLowerCase()}
+                    </Button>
+                  ))}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {STATUSES.map((st) => (
-                  <Button
-                    key={st}
-                    size="sm"
-                    variant={row?.status === st ? "default" : "outline"}
-                    onClick={() => setStatus(s, st)}
-                  >
-                    {st.slice(0, 1) + st.slice(1).toLowerCase()}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
       <div className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
         <h2 className="font-display text-xl">Recent absences</h2>
         <ul className="mt-3 space-y-2">
           {snap.attendance
             .filter((a) => a.status === "ABSENT")
-            .slice(0, 5)
+            .filter((a) => {
+              const st = snap.students.find((x) => x.id === a.student_id);
+              return st && st.class_id === activeClassId;
+            })
+            .slice(0, 8)
             .map((a) => {
               const s = snap.students.find((x) => x.id === a.student_id);
               return (
