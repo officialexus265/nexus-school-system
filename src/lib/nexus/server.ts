@@ -6767,3 +6767,98 @@ export const updateSchoolAccountRequest = createServerFn({ method: "POST" })
     );
     return { ok: true };
   });
+
+
+/** Public settings shown on login (no auth). */
+export const getPlatformPublicContact = createServerFn({ method: "POST" }).handler(
+  async () => {
+    const sql = await getSql();
+    try {
+      const rows = await sql<{ key: string; value: string }>`
+        select key, value from platform_settings
+        where key in (
+          'contact_phone_display',
+          'contact_phone_e164',
+          'contact_whatsapp',
+          'contact_label',
+          'support_email'
+        )
+      `;
+      const map: Record<string, string> = {};
+      for (const r of rows) map[r.key] = r.value;
+      return {
+        phoneDisplay: map.contact_phone_display || "0980697476",
+        phoneE164: map.contact_phone_e164 || "+265980697476",
+        whatsapp: map.contact_whatsapp || "265980697476",
+        contactLabel: map.contact_label || "system owner",
+        supportEmail: map.support_email || "",
+      };
+    } catch {
+      return {
+        phoneDisplay: "0980697476",
+        phoneE164: "+265980697476",
+        whatsapp: "265980697476",
+        contactLabel: "system owner",
+        supportEmail: "",
+      };
+    }
+  },
+);
+
+export const getPlatformSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    if (!(await isPlatformOwner(context.userId))) {
+      throw new Error("Platform owner only");
+    }
+    const sql = await getSql();
+    const rows = await sql<{ key: string; value: string; updated_at: string }>`
+      select key, value, updated_at::text from platform_settings order by key
+    `;
+    const settings: Record<string, string> = {};
+    for (const r of rows) settings[r.key] = r.value;
+    return { settings, rows };
+  });
+
+export const updatePlatformSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      contactPhoneDisplay?: string;
+      contactPhoneE164?: string;
+      contactWhatsapp?: string;
+      contactLabel?: string;
+      supportEmail?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    if (!(await isPlatformOwner(context.userId))) {
+      throw new Error("Platform owner only");
+    }
+    const sql = await getSql();
+    const pairs: [string, string][] = [];
+    if (data.contactPhoneDisplay !== undefined) {
+      pairs.push(["contact_phone_display", data.contactPhoneDisplay.trim()]);
+    }
+    if (data.contactPhoneE164 !== undefined) {
+      pairs.push(["contact_phone_e164", data.contactPhoneE164.trim()]);
+    }
+    if (data.contactWhatsapp !== undefined) {
+      pairs.push(["contact_whatsapp", data.contactWhatsapp.trim().replace(/\D/g, "")]);
+    }
+    if (data.contactLabel !== undefined) {
+      pairs.push(["contact_label", data.contactLabel.trim() || "system owner"]);
+    }
+    if (data.supportEmail !== undefined) {
+      pairs.push(["support_email", data.supportEmail.trim()]);
+    }
+    for (const [key, value] of pairs) {
+      await sql.query(
+        `insert into platform_settings (key, value, updated_at, updated_by)
+         values ($1, $2, now(), $3)
+         on conflict (key) do update set value = $2, updated_at = now(), updated_by = $3`,
+        [key, value, context.userId],
+      );
+    }
+    return { ok: true };
+  });

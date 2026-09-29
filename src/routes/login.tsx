@@ -13,6 +13,7 @@ import {
   checkUserRequires2fa,
   verifyTotpLogin,
   submitSchoolAccountRequest,
+  getPlatformPublicContact,
 } from "@/lib/nexus/server";
 import {
   BILLING_TIER_OPTIONS,
@@ -25,7 +26,18 @@ import { readCachedUser, writeCachedUser } from "@/lib/auth/use-current-user";
 
 export const Route = createFileRoute("/login")({ component: Login });
 
-function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boolean }) {
+function EmailPasswordForm({
+  canCreateFirstOwner,
+  contact,
+}: {
+  canCreateFirstOwner: boolean;
+  contact: {
+    phoneDisplay: string;
+    phoneE164: string;
+    whatsapp: string;
+    contactLabel: string;
+  };
+}) {
   const [mode, setMode] = useState<"sign-in" | "bootstrap">(
     canCreateFirstOwner ? "bootstrap" : "sign-in",
   );
@@ -309,18 +321,31 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
           <p>
             or contact the{" "}
             <a
-              href="tel:+265980697476"
+              href={`tel:${contact.phoneE164}`}
               className="font-medium text-foam underline-offset-4 hover:underline"
             >
-              system owner
+              {contact.contactLabel}
             </a>
+            {contact.whatsapp ? (
+              <>
+                {" · "}
+                <a
+                  href={`https://wa.me/${contact.whatsapp}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-foam underline-offset-4 hover:underline"
+                >
+                  WhatsApp
+                </a>
+              </>
+            ) : null}
           </p>
           <p>
             <a
-              href="tel:+265980697476"
+              href={`tel:${contact.phoneE164}`}
               className="text-sm font-medium tracking-wide text-foam underline-offset-4 hover:underline"
             >
-              0980697476
+              {contact.phoneDisplay}
             </a>
           </p>
         </div>
@@ -532,6 +557,12 @@ function Login() {
   const [status, setStatus] = useState<{
     canCreateFirstOwner: boolean;
   } | null>(null);
+  const [contact, setContact] = useState({
+    phoneDisplay: "0980697476",
+    phoneE164: "+265980697476",
+    whatsapp: "265980697476",
+    contactLabel: "system owner",
+  });
 
   useEffect(() => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -541,6 +572,16 @@ function Login() {
     void platformBootstrapStatus()
       .then((s) => setStatus({ canCreateFirstOwner: s.canCreateFirstOwner }))
       .catch(() => setStatus({ canCreateFirstOwner: false }));
+    void getPlatformPublicContact()
+      .then((c) =>
+        setContact({
+          phoneDisplay: c.phoneDisplay,
+          phoneE164: c.phoneE164,
+          whatsapp: c.whatsapp,
+          contactLabel: c.contactLabel,
+        }),
+      )
+      .catch(() => {});
   }, []);
 
   if (isPending || !status) return <Skeleton className="mx-auto mt-24 h-80 max-w-md" />;
@@ -575,7 +616,7 @@ function Login() {
                   ))}
                 </div>
               )}
-              <EmailPasswordForm canCreateFirstOwner={status.canCreateFirstOwner} />
+              <EmailPasswordForm canCreateFirstOwner={status.canCreateFirstOwner} contact={contact} />
             </>
           ) : (
             <p className="text-sm text-mist">Auth is disabled. Set VITE_AUTH_ENABLED=true</p>

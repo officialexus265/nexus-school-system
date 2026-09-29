@@ -14,6 +14,8 @@ import {
   updateSchoolAccountRequest,
   deleteSchool,
   purgeExpiredDeletedSchools,
+  getPlatformSettings,
+  updatePlatformSettings,
   transitionSchoolStatus,
   wipeAllSchools,
   bootstrapPlatformOwner,
@@ -44,6 +46,12 @@ function PlatformPage() {
   const [city, setCity] = useState("");
   const [area, setArea] = useState("");
   const [schoolSearch, setSchoolSearch] = useState("");
+  const [contactPhoneDisplay, setContactPhoneDisplay] = useState("0980697476");
+  const [contactPhoneE164, setContactPhoneE164] = useState("+265980697476");
+  const [contactWhatsapp, setContactWhatsapp] = useState("265980697476");
+  const [contactLabel, setContactLabel] = useState("system owner");
+  const [supportEmail, setSupportEmail] = useState("");
+
   const [billingTier, setBillingTier] = useState<BillingTier>("all");
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
   const [activationFee, setActivationFee] = useState(
@@ -87,7 +95,19 @@ function PlatformPage() {
   const isPlatform = q.data.isPlatformOwner;
 
   useEffect(() => {
-    if (isPlatform) void loadRequests();
+    if (isPlatform) {
+      void loadRequests();
+      void getPlatformSettings()
+        .then((r) => {
+          const s = r.settings;
+          if (s.contact_phone_display) setContactPhoneDisplay(s.contact_phone_display);
+          if (s.contact_phone_e164) setContactPhoneE164(s.contact_phone_e164);
+          if (s.contact_whatsapp) setContactWhatsapp(s.contact_whatsapp);
+          if (s.contact_label) setContactLabel(s.contact_label);
+          if (s.support_email) setSupportEmail(s.support_email);
+        })
+        .catch(() => {});
+    }
   }, [isPlatform]);
 
   async function handleCreate(e: React.FormEvent) {
@@ -194,6 +214,81 @@ function PlatformPage() {
 
       {showCreate && (
         
+      {isPlatform && (
+        <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+          <h2 className="font-display text-xl">Login & contact settings</h2>
+          <p className="text-sm text-muted-foreground">
+            Shown on the public login page when someone wants a school account. Change these here —
+            no code deploy needed for a new number.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Display phone (as shown)</Label>
+              <Input
+                value={contactPhoneDisplay}
+                onChange={(e) => setContactPhoneDisplay(e.target.value)}
+                placeholder="0980697476"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Phone for dial link (international)</Label>
+              <Input
+                value={contactPhoneE164}
+                onChange={(e) => setContactPhoneE164(e.target.value)}
+                placeholder="+265980697476"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>WhatsApp number (digits only, country code)</Label>
+              <Input
+                value={contactWhatsapp}
+                onChange={(e) => setContactWhatsapp(e.target.value)}
+                placeholder="265980697476"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Contact label</Label>
+              <Input
+                value={contactLabel}
+                onChange={(e) => setContactLabel(e.target.value)}
+                placeholder="system owner"
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Support email (optional)</Label>
+              <Input
+                type="email"
+                value={supportEmail}
+                onChange={(e) => setSupportEmail(e.target.value)}
+                placeholder="support@example.com"
+              />
+            </div>
+          </div>
+          <Button
+            type="button"
+            className="mt-4"
+            onClick={async () => {
+              try {
+                await updatePlatformSettings({
+                  data: {
+                    contactPhoneDisplay,
+                    contactPhoneE164,
+                    contactWhatsapp,
+                    contactLabel,
+                    supportEmail,
+                  },
+                });
+                toast.success("Login contact settings saved");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Save failed");
+              }
+            }}
+          >
+            Save contact settings
+          </Button>
+        </section>
+      )}
+
       {isPlatform && (
         <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
           <div className="flex flex-wrap items-center justify-between gap-2">
