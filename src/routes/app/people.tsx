@@ -482,6 +482,11 @@ function StaffInvite({ schoolId, onDone }: { schoolId: string; onDone: () => voi
           </div>
           <div className="space-y-1">
             <Label>Custom role (optional)</Label>
+            <p className="text-xs text-muted-foreground">
+              Built-in roles (Teacher, Bursar, …) set a simple job title. A <strong>custom role</strong>
+              is one you defined under <strong>Roles</strong> with specific permissions (e.g. fees only,
+              results only). If you pick a custom role, those permissions apply when they sign in.
+            </p>
             <select
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
               value={roleId}

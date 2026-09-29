@@ -22,6 +22,9 @@ import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
 import { useSnapshot } from "@/hooks/use-snapshot";
 import { useNexusSession } from "@/stores/session";
+import { exportSchoolDataBundle } from "@/lib/nexus/server";
+import { toast } from "sonner";
+
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 
@@ -184,11 +187,13 @@ export function AppShell() {
             <p className="truncate text-xs text-muted-foreground">
               {isPlatform
                 ? "Create and bill schools"
-                : schoolLocked
-                  ? "Account suspended — contact system owner"
-                  : schoolName
-                    ? "School management"
-                    : "Awaiting school assignment"}
+                : snap.data?.school?.status === "DELETED_PENDING_PURGE"
+                  ? "School scheduled for deletion — export your data"
+                  : schoolLocked
+                    ? "Account suspended — contact system owner"
+                    : schoolName
+                      ? "School management"
+                      : "Awaiting school assignment"}
             </p>
             {!isPlatform && schools.length > 1 && (
               <select
@@ -219,7 +224,49 @@ export function AppShell() {
           </div>
         </header>
 
-        {schoolLocked && (
+        {snap.data?.school?.status === "DELETED_PENDING_PURGE" && (
+          <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center text-sm text-amber-950 dark:text-amber-100">
+            <p>
+              This school was closed by the platform. You have until{" "}
+              <strong>
+                {(snap.data.school as { purge_after?: string }).purge_after
+                  ? new Date(
+                      (snap.data.school as { purge_after?: string }).purge_after!,
+                    ).toLocaleString()
+                  : "the end of the 14-day window"}
+              </strong>{" "}
+              to download your records. After that, all data is permanently removed and cannot be
+              recovered.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2"
+              onClick={async () => {
+                try {
+                  const data = await exportSchoolDataBundle({
+                    data: { schoolId: snap.data!.school.id },
+                  });
+                  const blob = new Blob([JSON.stringify(data, null, 2)], {
+                    type: "application/json",
+                  });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${snap.data!.school.slug || "school"}-export.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success("Download started");
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Export failed");
+                }
+              }}
+            >
+              Download school data
+            </Button>
+          </div>
+        )}
+        {schoolLocked && snap.data?.school?.status !== "DELETED_PENDING_PURGE" && (
           <div className="border-b border-red-500/40 bg-red-500/10 px-4 py-2 text-center text-sm text-red-800 dark:text-red-200">
             This school is suspended. You can view limited data; changes are blocked until the
             system owner reactivates the account.

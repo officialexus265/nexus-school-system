@@ -213,7 +213,9 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     isPlatformOwner: platformFlag,
     schoolLocked:
       !platformFlag &&
-      (school.status === "SUSPENDED" || school.status === "CANCELLED"),
+      (school.status === "SUSPENDED" ||
+        school.status === "CANCELLED" ||
+        school.status === "DELETED_PENDING_PURGE"),
     schools,
     school,
     staff,
@@ -797,6 +799,7 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
       ownerName: string;
       ownerEmail: string;
       city?: string;
+      area?: string;
       activationFee?: number;
       plan?: string;
       billingTier?: import("./billing").BillingTier;
@@ -846,14 +849,14 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
         primary_color, secondary_color, timezone, currency,
         owner_name, owner_email, invite_token, invite_expires_at,
         created_by, parent_app_slug, parent_app_name,
-        billing_tier, billing_period, school_type
+        billing_tier, billing_period, school_type, area
       ) values (
         $1,$2,$3,$4,$5,'Malawi','PENDING_PAYMENT',
         $6,$7,$8,
         '#0f766e','#134e4a','Africa/Blantyre','MWK',
         $9,$10,$11,$12,
         $13,$14,$15,
-        $16,$17,$18
+        $16,$17,$18,$19
       )`,
       [
         schoolId,
@@ -874,6 +877,7 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
         billingTier,
         billingPeriod,
         schoolTypeLabel,
+        data.area?.trim() || null,
       ],
     );
 
@@ -4884,6 +4888,7 @@ export const generateReportCard = createServerFn({ method: "POST" })
   });
 
 
+/** Soft-delete school: 14 days for owner to export data, then hard purge. */
 export const deleteSchool = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((data: { schoolId: string }) => data)
@@ -4892,52 +4897,158 @@ export const deleteSchool = createServerFn({ method: "POST" })
     if (!platform) throw new Error("Only platform owner can delete schools");
     const sql = await getSql();
     const id = data.schoolId;
-    // Child tables may lack ON DELETE CASCADE on older rows — delete in order best-effort
-    const tables = [
-      "parent_students",
-      "assessment_scores",
-      "student_results",
-      "result_submissions",
-      "attendance",
-      "behaviour_records",
-      "student_charges",
-      "payments",
-      "payment_intents",
-      "assessments",
-      "teacher_assignments",
-      "students",
-      "parents",
-      "staff",
-      "classes",
-      "subjects",
-      "terms",
-      "academic_years",
-      "fee_structures",
-      "announcements",
-      "notifications",
-      "calendar_events",
-      "documents",
-      "messages",
-      "admission_applications",
-      "school_invites",
-      "parent_app_settings",
-      "school_sms_settings",
-      "school_setup_progress",
-      "user_school_memberships",
-      "platform_invoices",
-      "grading_scales",
-      "examinations",
-      "audit_logs",
-    ];
-    for (const table of tables) {
-      try {
-        await sql.query(`delete from ${table} where school_id = $1`, [id]);
-      } catch {
-        /* table or column may not exist */
-      }
+    const purgeAfter = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    await sql.query(
+      `update schools set
+         status = 'DELETED_PENDING_PURGE',
+         deleted_at = now(),
+         purge_after = $1,
+         deleted_by = $2
+       where id = $3`,
+      [purgeAfter.toISOString(), context.userId, id],
+    );
+    try {
+      await audit(
+        context.userId,
+        id,
+        "Platform",
+        "SCHOOL_SOFT_DELETE",
+        "schools",
+        id,
+        `Purge after ${purgeAfter.toISOString()}`,
+      );
+    } catch {
+      /* ignore */
     }
-    await sql.query(`delete from schools where id = $1`, [id]);
-    return { ok: true };
+    return {
+      ok: true,
+      softDelete: true,
+      purgeAfter: purgeAfter.toISOString(),
+      message:
+        "School marked for deletion. Owner has 14 days to download records, then data is permanently removed.",
+    };
+  });
+
+/** Hard-delete one school immediately (after grace or force). */
+export async function hardDeleteSchoolData(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  id: string,
+) {
+  const tables = [
+    "parent_students",
+    "assessment_scores",
+    "student_results",
+    "result_submissions",
+    "attendance",
+    "behaviour_records",
+    "student_charges",
+    "payments",
+    "payment_intents",
+    "assessments",
+    "teacher_assignments",
+    "students",
+    "parents",
+    "staff",
+    "classes",
+    "subjects",
+    "terms",
+    "academic_years",
+    "fee_structures",
+    "announcements",
+    "notifications",
+    "calendar_events",
+    "documents",
+    "messages",
+    "admission_applications",
+    "school_invites",
+    "parent_app_settings",
+    "school_sms_settings",
+    "school_setup_progress",
+    "user_school_memberships",
+    "platform_invoices",
+    "grading_scales",
+    "examinations",
+    "audit_logs",
+    "staff_invites",
+  ];
+  for (const table of tables) {
+    try {
+      await sql.query(`delete from ${table} where school_id = $1`, [id]);
+    } catch {
+      /* ignore */
+    }
+  }
+  await sql.query(`delete from schools where id = $1`, [id]);
+}
+
+export const purgeExpiredDeletedSchools = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const due = await sql<{ id: string; name: string }>`
+      select id, name from schools
+      where status = 'DELETED_PENDING_PURGE'
+        and purge_after is not null
+        and purge_after <= now()
+    `;
+    for (const s of due) {
+      await hardDeleteSchoolData(sql, s.id);
+    }
+    return { ok: true, purged: due.length, schools: due.map((s) => s.name) };
+  });
+
+/** Owner download of school records during the 14-day window. */
+export const exportSchoolDataBundle = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const schools = await sql<School>`
+      select * from schools where id = ${data.schoolId} limit 1
+    `;
+    const school = schools[0];
+    if (!school) throw new Error("School not found");
+    const platform = await isPlatformOwner(context.userId);
+    const membership = await sql<{ role: string }>`
+      select role from user_school_memberships
+      where user_id = ${context.userId} and school_id = ${data.schoolId}
+      limit 1
+    `;
+    const isOwner =
+      platform ||
+      membership[0]?.role === "owner" ||
+      school.owner_email?.toLowerCase() ===
+        (
+          await sql<{ email: string }>`select email from "user" where id = ${context.userId} limit 1`
+        )[0]?.email?.toLowerCase();
+    if (!isOwner) throw new Error("Only the school owner or platform can export");
+
+    const students = await sql`select * from students where school_id = ${data.schoolId}`;
+    const parents = await sql`select * from parents where school_id = ${data.schoolId}`;
+    const staff = await sql`select * from staff where school_id = ${data.schoolId}`;
+    const classes = await sql`select * from classes where school_id = ${data.schoolId}`;
+    const subjects = await sql`select * from subjects where school_id = ${data.schoolId}`;
+    const charges = await sql`select * from student_charges where school_id = ${data.schoolId}`;
+    const payments = await sql`select * from payments where school_id = ${data.schoolId}`;
+    const results = await sql`select * from student_results where school_id = ${data.schoolId}`;
+    const attendance = await sql`select * from attendance where school_id = ${data.schoolId}`;
+
+    return {
+      exportedAt: new Date().toISOString(),
+      purgeAfter: (school as { purge_after?: string }).purge_after || null,
+      school,
+      students,
+      parents,
+      staff,
+      classes,
+      subjects,
+      charges,
+      payments,
+      results,
+      attendance,
+    };
   });
 
 /** Remove every school and related row (fresh platform). */

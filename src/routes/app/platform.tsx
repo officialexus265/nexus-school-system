@@ -13,6 +13,7 @@ import {
   listSchoolAccountRequests,
   updateSchoolAccountRequest,
   deleteSchool,
+  purgeExpiredDeletedSchools,
   transitionSchoolStatus,
   wipeAllSchools,
   bootstrapPlatformOwner,
@@ -41,6 +42,8 @@ function PlatformPage() {
   const [ownerName, setOwnerName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [city, setCity] = useState("");
+  const [area, setArea] = useState("");
+  const [schoolSearch, setSchoolSearch] = useState("");
   const [billingTier, setBillingTier] = useState<BillingTier>("all");
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
   const [activationFee, setActivationFee] = useState(
@@ -98,6 +101,7 @@ function PlatformPage() {
           ownerName,
           ownerEmail,
           city: city || undefined,
+          area: area || undefined,
           activationFee: Number(activationFee) || priceFor(billingTier, billingPeriod),
           plan: "Standard",
           billingTier,
@@ -293,329 +297,195 @@ function PlatformPage() {
         </section>
       )}
 
-<section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-          <h2 className="font-display text-xl">Create school & invite owner</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            An invite link will be generated. In production an email is sent automatically.
-            For now, copy the link and send it to the school owner (WhatsApp / email).
-          </p>
-          <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="schoolName">School name *</Label>
+<section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-xl">Schools</h2>
+            <div className="flex flex-wrap gap-2">
               <Input
-                id="schoolName"
-                value={schoolName}
-                onChange={(e) => setSchoolName(e.target.value)}
-                required
-                placeholder="e.g. Lakeview Secondary"
+                className="max-w-xs"
+                placeholder="Search name, city, area, email…"
+                value={schoolSearch}
+                onChange={(e) => setSchoolSearch(e.target.value)}
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="city">City</Label>
-              <Input
-                id="city"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                placeholder="e.g. Lilongwe"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ownerName">Owner full name *</Label>
-              <Input
-                id="ownerName"
-                value={ownerName}
-                onChange={(e) => setOwnerName(e.target.value)}
-                required
-                placeholder="e.g. Chisomo Banda"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ownerEmail">Owner email *</Label>
-              <Input
-                id="ownerEmail"
-                type="email"
-                value={ownerEmail}
-                onChange={(e) => setOwnerEmail(e.target.value)}
-                required
-                placeholder="owner@school.ac.mw"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>School package (sections)</Label>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={billingTier}
-                onChange={(e) => {
-                  const tier = e.target.value as BillingTier;
-                  setBillingTier(tier);
-                  setActivationFee(String(priceFor(tier, billingPeriod)));
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const r = await purgeExpiredDeletedSchools();
+                    toast.success(`Purged ${r.purged} expired school(s)`);
+                    await invalidate();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Purge failed");
+                  }
                 }}
               >
-                {BILLING_TIER_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label} — {formatMwk(SUBSCRIPTION_PRICES[o.value].monthly)} / month
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Payment period</Label>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={billingPeriod}
-                onChange={(e) => {
-                  const period = e.target.value as BillingPeriod;
-                  setBillingPeriod(period);
-                  setActivationFee(String(priceFor(billingTier, period)));
-                }}
-              >
-                <option value="monthly">
-                  Monthly — {formatMwk(priceFor(billingTier, "monthly"))}
-                </option>
-                <option value="term">
-                  Per term — {formatMwk(priceFor(billingTier, "term"))}
-                </option>
-                <option value="annual">
-                  Academic year — {formatMwk(priceFor(billingTier, "annual"))}
-                </option>
-              </select>
-            </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label>All price options (select fills package + period + fee)</Label>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={`${billingTier}:${billingPeriod}`}
-                onChange={(e) => {
-                  const [tier, period] = e.target.value.split(":") as [
-                    BillingTier,
-                    BillingPeriod,
-                  ];
-                  setBillingTier(tier);
-                  setBillingPeriod(period);
-                  setActivationFee(String(priceFor(tier, period)));
-                }}
-              >
-                {BILLING_TIER_OPTIONS.flatMap((o) =>
-                  (["monthly", "term", "annual"] as BillingPeriod[]).map((period) => (
-                    <option
-                      key={`${o.value}-${period}`}
-                      value={`${o.value}:${period}`}
-                    >
-                      {o.label} ·{" "}
-                      {period === "monthly"
-                        ? "Monthly"
-                        : period === "term"
-                          ? "Per term"
-                          : "Academic year"}{" "}
-                      — {formatMwk(priceFor(o.value, period))}
-                    </option>
-                  )),
-                )}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="fee">Activation / first period fee (MWK)</Label>
-              <Input
-                id="fee"
-                type="number"
-                value={activationFee}
-                onChange={(e) => setActivationFee(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Auto-filled from package; you can override if you agreed a custom fee.
-              </p>
-            </div>
-            <div className="flex items-end">
-              <Button type="submit" disabled={busy}>
-                {busy ? "Creating…" : "Create & generate invite"}
+                Purge expired deletions
               </Button>
-
             </div>
-          </form>
-
-          {lastInviteLink && (
-            <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
-              <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                Invite link ready — copy and send to the school owner
-              </p>
-              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <code className="flex-1 break-all rounded bg-muted px-3 py-2 text-xs">
-                  {lastInviteLink}
-                </code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    navigator.clipboard.writeText(lastInviteLink);
-                    toast.success("Link copied");
-                  }}
-                >
-                  Copy link
-                </Button>
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                The owner opens this link, sets a password, and lands in their school workspace.
-                Link expires in 7 days.
-              </p>
-            </div>
-          )}
-        </section>
-      )}
-
-      <div className="mt-6 overflow-x-auto rounded-xl bg-card shadow-[var(--shadow-border)]">
-        <table className="w-full min-w-[640px] text-left text-sm">
-          <thead className="border-b border-border text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 font-medium">School</th>
-              <th className="px-4 py-3 font-medium">Owner</th>
-              <th className="px-4 py-3 font-medium">City</th>
-              <th className="px-4 py-3 font-medium">Plan</th>
-              <th className="px-4 py-3 font-medium">Fee</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {schools.map((s) => (
-              <tr key={s.id} className="border-b border-border last:border-0">
-                <td className="px-4 py-3">
-                  <p className="font-medium">{s.name}</p>
-                  <p className="text-xs text-muted-foreground">{s.registration_number}</p>
-                </td>
-                <td className="px-4 py-3">
-                  <p className="text-sm">{s.owner_name ?? "—"}</p>
-                  <p className="text-xs text-muted-foreground">{s.owner_email ?? ""}</p>
-                </td>
-                <td className="px-4 py-3">{s.city}</td>
-                <td className="px-4 py-3">{s.subscription_plan}</td>
-                <td className="px-4 py-3 tabular-nums">{money(s.activation_fee)}</td>
-                <td className="px-4 py-3">
-                  <StatusPill value={s.status} />
-                </td>
-                <td className="px-4 py-3 text-right">
-                  {s.status !== "ACTIVE" ? (
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        try {
-                          await transitionSchoolStatus({
-                            data: { schoolId: s.id, toStatus: "ACTIVE", reason: "Activation by platform owner" },
-                          });
-                          toast.success(`${s.name} is now active`);
-                          await invalidate();
-                        } catch (e) {
-                          toast.error(e instanceof Error ? e.message : "Failed");
-                        }
-                      }}
-                    >
-                      Activate
-                    </Button>
-                  ) : (
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            await transitionSchoolStatus({
-                              data: {
-                                schoolId: s.id,
-                                toStatus: "GRACE_PERIOD",
-                                reason: "Grace period started",
-                              },
-                            });
-                            toast.success("Grace period started");
-                            await invalidate();
-                          } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed");
-                          }
-                        }}
-                      >
-                        Grace
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            await transitionSchoolStatus({
-                              data: {
-                                schoolId: s.id,
-                                toStatus: "SUSPENDED",
-                                reason: "Suspended by platform",
-                              },
-                            });
-                            toast.success("School suspended");
-                            await invalidate();
-                          } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed");
-                          }
-                        }}
-                      >
-                        Suspend
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            const r = await resendSchoolInvite({ data: { schoolId: s.id } });
-                            toast.success(
-                              r.emailSent ? "Invite resent by email" : "Invite link renewed",
-                            );
-                            if (r.inviteLink) console.log(r.inviteLink);
-                          } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed");
-                          }
-                        }}
-                      >
-                        Resend invite
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600"
-                        onClick={async () => {
-                          if (
-                            !window.confirm(
-                              `Permanently delete “${s.name}” and all its data?`,
-                            )
-                          )
-                            return;
-                          try {
-                            await deleteSchool({ data: { schoolId: s.id } });
-                            toast.success("School deleted");
-                            await invalidate();
-                          } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed");
-                          }
-                        }}
-                      >
-                        Delete
-                      </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Grouped by city → area. Soft-deleted schools stay 14 days for owner data export.
+          </p>
+          {(() => {
+            const q = schoolSearch.trim().toLowerCase();
+            const filtered = schools.filter((s) => {
+              if (!q) return true;
+              const blob = [
+                s.name,
+                s.city,
+                (s as { area?: string }).area,
+                s.owner_email,
+                s.owner_name,
+                s.slug,
+                s.status,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+              return blob.includes(q);
+            });
+            const byCity = new Map<string, typeof filtered>();
+            for (const s of filtered) {
+              const cityKey = (s.city || "Unspecified city").trim();
+              if (!byCity.has(cityKey)) byCity.set(cityKey, []);
+              byCity.get(cityKey)!.push(s);
+            }
+            const cities = [...byCity.keys()].sort((a, b) => a.localeCompare(b));
+            if (!filtered.length) {
+              return (
+                <p className="mt-4 text-sm text-muted-foreground">No schools match.</p>
+              );
+            }
+            return cities.map((cityKey) => {
+              const inCity = byCity.get(cityKey)!;
+              const byArea = new Map<string, typeof inCity>();
+              for (const s of inCity) {
+                const areaKey = ((s as { area?: string }).area || "General").trim();
+                if (!byArea.has(areaKey)) byArea.set(areaKey, []);
+                byArea.get(areaKey)!.push(s);
+              }
+              return (
+                <div key={cityKey} className="mt-6">
+                  <h3 className="text-sm font-semibold tracking-wide text-muted-foreground">
+                    {cityKey}
+                  </h3>
+                  {[...byArea.keys()].sort().map((areaKey) => (
+                    <div key={areaKey} className="mt-3">
+                      <h4 className="text-xs font-medium uppercase text-muted-foreground">
+                        {areaKey}
+                      </h4>
+                      <div className="mt-2 overflow-x-auto">
+                        <table className="w-full min-w-[640px] text-left text-sm">
+                          <thead className="text-[11px] uppercase text-muted-foreground">
+                            <tr>
+                              <th className="py-2 pr-2">School</th>
+                              <th className="py-2 pr-2">Owner</th>
+                              <th className="py-2 pr-2">Status</th>
+                              <th className="py-2 pr-2">Fee</th>
+                              <th className="py-2">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {byArea.get(areaKey)!.map((s) => (
+                              <tr key={s.id} className="border-t border-border">
+                                <td className="py-2 pr-2">
+                                  <div className="font-medium">{s.name}</div>
+                                  <div className="text-xs text-muted-foreground">{s.slug}</div>
+                                </td>
+                                <td className="py-2 pr-2">
+                                  <div>{s.owner_name}</div>
+                                  <div className="text-xs">{s.owner_email}</div>
+                                </td>
+                                <td className="py-2 pr-2">
+                                  <StatusPill value={s.status} />
+                                  {s.status === "DELETED_PENDING_PURGE" &&
+                                  (s as { purge_after?: string }).purge_after ? (
+                                    <div className="text-[10px] text-muted-foreground">
+                                      Purge after{" "}
+                                      {new Date(
+                                        (s as { purge_after?: string }).purge_after!,
+                                      ).toLocaleDateString()}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="py-2 pr-2 tabular-nums">
+                                  {money(s.activation_fee)}
+                                </td>
+                                <td className="py-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {s.status !== "ACTIVE" &&
+                                      s.status !== "DELETED_PENDING_PURGE" && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={async () => {
+                                            try {
+                                              await transitionSchoolStatus({
+                                                data: {
+                                                  schoolId: s.id,
+                                                  toStatus: "ACTIVE",
+                                                  reason: "Activation by platform owner",
+                                                },
+                                              });
+                                              toast.success("Activated");
+                                              await invalidate();
+                                            } catch (e) {
+                                              toast.error(
+                                                e instanceof Error ? e.message : "Failed",
+                                              );
+                                            }
+                                          }}
+                                        >
+                                          Activate
+                                        </Button>
+                                      )}
+                                    {s.status !== "DELETED_PENDING_PURGE" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-red-600"
+                                        onClick={async () => {
+                                          if (
+                                            !window.confirm(
+                                              `Soft-delete “${s.name}”? Owner has 14 days to export data, then permanent wipe.`,
+                                            )
+                                          )
+                                            return;
+                                          try {
+                                            const r = await deleteSchool({
+                                              data: { schoolId: s.id },
+                                            });
+                                            toast.success(
+                                              r.message || "Scheduled for deletion",
+                                            );
+                                            await invalidate();
+                                          } catch (e) {
+                                            toast.error(
+                                              e instanceof Error ? e.message : "Failed",
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        Delete
+                                      </Button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                  ))}
+                </div>
+              );
+            });
+          })()}
+        </section>
 
-      <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-        <h2 className="font-display text-xl">Audit</h2>
-        <ul className="mt-3 space-y-2">
-          {q.data.audit.slice(0, 8).map((a) => (
-            <li key={a.id} className="text-sm">
-              <span className="font-medium">{a.action.replaceAll("_", " ")}</span>
-              <span className="text-muted-foreground">
-                {" "}
-                · {a.actor} · {a.detail}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
     </div>
   );
 }
