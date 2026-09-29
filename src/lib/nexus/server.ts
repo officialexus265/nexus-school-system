@@ -6503,3 +6503,156 @@ export const deleteStaffRecord = createServerFn({ method: "POST" })
     );
     return { ok: true };
   });
+
+
+/** Public: school account proposal from login page (no auth). */
+export const submitSchoolAccountRequest = createServerFn({ method: "POST" })
+  .validator(
+    (data: {
+      schoolName: string;
+      contactName: string;
+      email: string;
+      phone: string;
+      city?: string;
+      locationNotes?: string;
+      sections: string[]; // nursery | primary | secondary
+      billingPeriod: "monthly" | "term" | "annual";
+      message?: string;
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    const schoolName = data.schoolName.trim();
+    const contactName = data.contactName.trim();
+    const email = data.email.trim().toLowerCase();
+    const phone = data.phone.trim();
+    if (!schoolName || !contactName || !email || !phone) {
+      throw new Error("School name, your name, email and phone are required");
+    }
+    const sections = (data.sections || [])
+      .map((s) => s.toLowerCase().trim())
+      .filter((s) => ["nursery", "primary", "secondary"].includes(s));
+    if (!sections.length) {
+      throw new Error("Select at least one section: Nursery, Primary, or Secondary");
+    }
+    const hasN = sections.includes("nursery");
+    const hasP = sections.includes("primary");
+    const hasS = sections.includes("secondary");
+    let tier: import("./billing").BillingTier = "primary";
+    if (hasN && hasP && hasS) tier = "all";
+    else if (hasN && hasP) tier = "nursery_primary";
+    else if (hasN && hasS) tier = "nursery_secondary";
+    else if (hasP && hasS) tier = "primary_secondary";
+    else if (hasN) tier = "nursery";
+    else if (hasS) tier = "secondary";
+    else tier = "primary";
+
+    const period = data.billingPeriod || "monthly";
+    const amount = priceFor(tier, period);
+    const id = `sar-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sql = await getSql();
+    await sql.query(
+      `insert into school_account_requests (
+         id, school_name, contact_name, email, phone, city, location_notes,
+         sections, billing_tier, billing_period, quoted_amount, message, status
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'PENDING')`,
+      [
+        id,
+        schoolName,
+        contactName,
+        email,
+        phone,
+        data.city?.trim() || null,
+        data.locationNotes?.trim() || null,
+        sections.join(","),
+        tier,
+        period,
+        amount,
+        data.message?.trim() || null,
+      ],
+    );
+
+    // Notify platform owner by email if configured
+    try {
+      const owners = await sql<{ email: string }>`
+        select email from "user" where is_platform_owner = true limit 3
+      `;
+      for (const o of owners) {
+        if (!o.email) continue;
+        await sendEmail({
+          to: o.email,
+          subject: `NEXUS school account request — ${schoolName}`,
+          text: `${contactName} requested a school account for ${schoolName}.
+Email: ${email}
+Phone: ${phone}
+Sections: ${sections.join(", ")}
+Period: ${period}
+Quoted: MWK ${amount}
+Open Platform → Account requests to review.`,
+          html: `<p><strong>${contactName}</strong> requested a school account for <strong>${schoolName}</strong>.</p>
+<ul>
+<li>Email: ${email}</li>
+<li>Phone: ${phone}</li>
+<li>Sections: ${sections.join(", ")}</li>
+<li>Billing: ${period} — MWK ${amount.toLocaleString()}</li>
+</ul>
+<p>Review under Platform → Account requests.</p>`,
+        });
+      }
+    } catch {
+      /* non-fatal */
+    }
+
+    return { ok: true, id, quotedAmount: amount, billingTier: tier, billingPeriod: period };
+  });
+
+export const listSchoolAccountRequests = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { status?: string } | undefined) => data ?? {})
+  .handler(async ({ context, data }) => {
+    if (!(await isPlatformOwner(context.userId))) {
+      throw new Error("Platform owner only");
+    }
+    const sql = await getSql();
+    const status = data.status?.trim();
+    if (status) {
+      return {
+        requests: await sql`
+          select * from school_account_requests
+          where status = ${status}
+          order by created_at desc
+          limit 100
+        `,
+      };
+    }
+    return {
+      requests: await sql`
+        select * from school_account_requests
+        order by created_at desc
+        limit 100
+      `,
+    };
+  });
+
+export const updateSchoolAccountRequest = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      requestId: string;
+      status: "PENDING" | "CONTACTED" | "APPROVED" | "REJECTED";
+      notes?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    if (!(await isPlatformOwner(context.userId))) {
+      throw new Error("Platform owner only");
+    }
+    const sql = await getSql();
+    await sql.query(
+      `update school_account_requests
+       set status = $1, notes = coalesce($2, notes),
+           reviewed_at = now(), reviewed_by = $3
+       where id = $4`,
+      [data.status, data.notes?.trim() || null, context.userId, data.requestId],
+    );
+    return { ok: true };
+  });

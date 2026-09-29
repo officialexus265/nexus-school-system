@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { PageHeader, StatCard } from "@/components/page-header";
@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
 import {
   createSchoolInvite,
+  listSchoolAccountRequests,
+  updateSchoolAccountRequest,
   deleteSchool,
   transitionSchoolStatus,
   wipeAllSchools,
@@ -46,6 +48,33 @@ function PlatformPage() {
   );
   const [busy, setBusy] = useState(false);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
+  const [accountRequests, setAccountRequests] = useState<
+    {
+      id: string;
+      school_name: string;
+      contact_name: string;
+      email: string;
+      phone: string;
+      city: string | null;
+      sections: string;
+      billing_tier: string;
+      billing_period: string;
+      quoted_amount: number;
+      status: string;
+      message: string | null;
+      created_at: string;
+    }[]
+  >([]);
+
+  async function loadRequests() {
+    try {
+      const r = await listSchoolAccountRequests({ data: {} });
+      setAccountRequests(r.requests as typeof accountRequests);
+    } catch {
+      setAccountRequests([]);
+    }
+  }
+
 
   if (q.isPending) return <Skeleton className="h-64" />;
   if (!q.data) return null;
@@ -54,6 +83,9 @@ function PlatformPage() {
   const active = schools.filter((s) => s.status === "ACTIVE").length;
   const isPlatform = q.data.isPlatformOwner;
 
+  useEffect(() => {
+    if (isPlatform) void loadRequests();
+  }, [isPlatform]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -157,7 +189,111 @@ function PlatformPage() {
       </div>
 
       {showCreate && (
-        <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+        
+      {isPlatform && (
+        <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-xl">School account requests</h2>
+              <p className="text-sm text-muted-foreground">
+                Proposals submitted from the public login page.
+              </p>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadRequests()}>
+              Refresh
+            </Button>
+          </div>
+          {accountRequests.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">No requests yet.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="py-2 pr-2">School</th>
+                    <th className="py-2 pr-2">Contact</th>
+                    <th className="py-2 pr-2">Package</th>
+                    <th className="py-2 pr-2">Status</th>
+                    <th className="py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accountRequests.map((r) => (
+                    <tr key={r.id} className="border-t border-border align-top">
+                      <td className="py-2 pr-2">
+                        <div className="font-medium">{r.school_name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {r.city || "—"} · {new Date(r.created_at).toLocaleString()}
+                        </div>
+                        {r.message ? (
+                          <div className="mt-1 text-xs text-muted-foreground">{r.message}</div>
+                        ) : null}
+                      </td>
+                      <td className="py-2 pr-2">
+                        <div>{r.contact_name}</div>
+                        <div className="text-xs">{r.email}</div>
+                        <div className="text-xs">{r.phone}</div>
+                      </td>
+                      <td className="py-2 pr-2">
+                        <div className="text-xs">{r.sections}</div>
+                        <div className="text-xs">
+                          {r.billing_tier} / {r.billing_period}
+                        </div>
+                        <div className="tabular-nums font-medium">
+                          MWK {Number(r.quoted_amount).toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="py-2 pr-2">{r.status}</td>
+                      <td className="py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {(["CONTACTED", "APPROVED", "REJECTED"] as const).map((st) => (
+                            <Button
+                              key={st}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={r.status === st}
+                              onClick={async () => {
+                                try {
+                                  await updateSchoolAccountRequest({
+                                    data: { requestId: r.id, status: st },
+                                  });
+                                  toast.success(`Marked ${st}`);
+                                  void loadRequests();
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : "Failed");
+                                }
+                              }}
+                            >
+                              {st}
+                            </Button>
+                          ))}
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setShowCreate(true);
+                              setSchoolName(r.school_name);
+                              setOwnerName(r.contact_name);
+                              setOwnerEmail(r.email);
+                              setCity(r.city || "");
+                              toast.message("Create form filled — choose package & send invite");
+                            }}
+                          >
+                            Create school
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+<section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
           <h2 className="font-display text-xl">Create school & invite owner</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             An invite link will be generated. In production an email is sent automatically.

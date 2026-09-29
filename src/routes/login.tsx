@@ -12,7 +12,15 @@ import {
   platformBootstrapStatus,
   checkUserRequires2fa,
   verifyTotpLogin,
+  submitSchoolAccountRequest,
 } from "@/lib/nexus/server";
+import {
+  BILLING_TIER_OPTIONS,
+  formatMwk,
+  priceFor,
+  type BillingPeriod,
+  type BillingTier,
+} from "@/lib/nexus/billing";
 import { readCachedUser, writeCachedUser } from "@/lib/auth/use-current-user";
 
 export const Route = createFileRoute("/login")({ component: Login });
@@ -28,6 +36,7 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
   const [pending, setPending] = useState(false);
   const [totpStep, setTotpStep] = useState(false);
   const [totpCode, setTotpCode] = useState("");
+  const [showProposal, setShowProposal] = useState(false);
 
 
   useEffect(() => {
@@ -171,6 +180,14 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
     }
   }
 
+  if (showProposal) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-ink-2 p-5">
+        <SchoolAccountProposalForm onClose={() => setShowProposal(false)} />
+      </div>
+    );
+  }
+
   if (totpStep) {
     return (
       <form onSubmit={submitTotp} className="space-y-3">
@@ -280,9 +297,17 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
             : "Back to sign in"}
         </button>
       ) : (
-        <div className="space-y-1 pt-1 text-center text-xs text-mist">
+        <div className="space-y-3 pt-2 text-center text-xs text-mist">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 w-full border-white/20 bg-transparent text-foam hover:bg-white/10"
+            onClick={() => setShowProposal(true)}
+          >
+            Request a school account
+          </Button>
           <p>
-            Do you want a school account? Contact the{" "}
+            or contact the{" "}
             <a
               href="tel:+265980697476"
               className="font-medium text-foam underline-offset-4 hover:underline"
@@ -300,6 +325,204 @@ function EmailPasswordForm({ canCreateFirstOwner }: { canCreateFirstOwner: boole
           </p>
         </div>
       )}
+    </form>
+  );
+}
+
+
+
+function SchoolAccountProposalForm({ onClose }: { onClose: () => void }) {
+  const [schoolName, setSchoolName] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [city, setCity] = useState("");
+  const [locationNotes, setLocationNotes] = useState("");
+  const [sections, setSections] = useState<string[]>(["primary"]);
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
+  const [message, setMessage] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ amount: number } | null>(null);
+
+  function toggleSection(s: string) {
+    setSections((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
+    );
+  }
+
+  function resolveTier(): BillingTier {
+    const hasN = sections.includes("nursery");
+    const hasP = sections.includes("primary");
+    const hasS = sections.includes("secondary");
+    if (hasN && hasP && hasS) return "all";
+    if (hasN && hasP) return "nursery_primary";
+    if (hasN && hasS) return "nursery_secondary";
+    if (hasP && hasS) return "primary_secondary";
+    if (hasN) return "nursery";
+    if (hasS) return "secondary";
+    return "primary";
+  }
+
+  const tier = resolveTier();
+  const quote = sections.length ? priceFor(tier, billingPeriod) : 0;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setPending(true);
+    try {
+      const r = await submitSchoolAccountRequest({
+        data: {
+          schoolName,
+          contactName,
+          email,
+          phone,
+          city: city || undefined,
+          locationNotes: locationNotes || undefined,
+          sections,
+          billingPeriod,
+          message: message || undefined,
+        },
+      });
+      setDone({ amount: r.quotedAmount });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not submit request");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="space-y-4 text-center">
+        <p className="text-lg font-medium text-foam">Request received</p>
+        <p className="text-sm text-mist">
+          We will contact you about opening <strong className="text-foam">{schoolName}</strong>.
+          Indicative package: {formatMwk(done.amount)}.
+        </p>
+        <Button type="button" onClick={onClose} className="w-full bg-foam text-ink">
+          Back to sign in
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="mb-2 text-center">
+        <p className="text-lg font-medium text-foam">School account request</p>
+        <p className="text-xs text-mist">Tell us about your school. No payment is taken here.</p>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">School name *</Label>
+        <Input
+          required
+          value={schoolName}
+          onChange={(e) => setSchoolName(e.target.value)}
+          className="border-white/10 bg-ink-3 text-foam"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">Your full name *</Label>
+        <Input
+          required
+          value={contactName}
+          onChange={(e) => setContactName(e.target.value)}
+          className="border-white/10 bg-ink-3 text-foam"
+        />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label className="text-mist">Email *</Label>
+          <Input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="border-white/10 bg-ink-3 text-foam"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-mist">Phone *</Label>
+          <Input
+            type="tel"
+            required
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="border-white/10 bg-ink-3 text-foam"
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">City / location</Label>
+        <Input
+          value={city}
+          onChange={(e) => setCity(e.target.value)}
+          placeholder="e.g. Lilongwe"
+          className="border-white/10 bg-ink-3 text-foam"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">Location notes (optional)</Label>
+        <Input
+          value={locationNotes}
+          onChange={(e) => setLocationNotes(e.target.value)}
+          placeholder="District, campus, etc."
+          className="border-white/10 bg-ink-3 text-foam"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label className="text-mist">Sections you offer *</Label>
+        <div className="flex flex-wrap gap-3 text-sm text-foam">
+          {(["nursery", "primary", "secondary"] as const).map((s) => (
+            <label key={s} className="flex items-center gap-2 capitalize">
+              <input
+                type="checkbox"
+                checked={sections.includes(s)}
+                onChange={() => toggleSection(s)}
+              />
+              {s}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">Preferred billing period</Label>
+        <select
+          className="flex h-10 w-full rounded-md border border-white/10 bg-ink-3 px-3 text-sm text-foam"
+          value={billingPeriod}
+          onChange={(e) => setBillingPeriod(e.target.value as BillingPeriod)}
+        >
+          <option value="monthly">Monthly — {formatMwk(priceFor(tier, "monthly"))}</option>
+          <option value="term">Per term — {formatMwk(priceFor(tier, "term"))}</option>
+          <option value="annual">Academic year — {formatMwk(priceFor(tier, "annual"))}</option>
+        </select>
+        <p className="text-[11px] text-mist">
+          Package estimate: <span className="text-foam">{formatMwk(quote)}</span> (
+          {BILLING_TIER_OPTIONS.find((o) => o.value === tier)?.label})
+        </p>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-mist">Message (optional)</Label>
+        <textarea
+          className="min-h-20 w-full rounded-md border border-white/10 bg-ink-3 px-3 py-2 text-sm text-foam"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Anything we should know?"
+        />
+      </div>
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      <Button type="submit" disabled={pending} className="h-11 w-full bg-foam text-ink">
+        {pending ? "Sending…" : "Submit request"}
+      </Button>
+      <button
+        type="button"
+        onClick={onClose}
+        className="w-full text-center text-xs text-mist underline-offset-4 hover:underline"
+      >
+        Cancel
+      </button>
     </form>
   );
 }
