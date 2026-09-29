@@ -14,6 +14,8 @@ import {
   createAssessment,
   createExamination,
   createSchoolClass,
+  addClassStream,
+  moveStudentsToClass,
   createSchoolSubject,
   deleteSchoolClass,
   deleteSchoolSubject,
@@ -147,6 +149,11 @@ function AcademicsPage() {
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <div>
                     <h3 className="text-sm font-medium">Classes</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Use <strong>Add stream</strong> for parallel groups (Form 4 A / Form 4 B). Each
+                      stream has its own register. Move students via Edit on the Students page.
+                    </p>
+
                     <ul className="mt-2 divide-y divide-border">
                       {sectionClasses.map((c) => (
                         <li
@@ -159,25 +166,55 @@ function AcademicsPage() {
                               {snap.students.filter((s) => s.class_id === c.id).length} students
                             </span>
                           </span>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-red-600"
-                            onClick={async () => {
-                              if (!window.confirm(`Delete class “${c.name}”?`)) return;
-                              try {
-                                await deleteSchoolClass({
-                                  data: { schoolId: snap.school.id, classId: c.id },
-                                });
-                                toast.success("Class deleted");
-                                void invalidate();
-                              } catch (e) {
-                                toast.error(e instanceof Error ? e.message : "Failed");
-                              }
-                            }}
-                          >
-                            Delete
-                          </Button>
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={async () => {
+                                if (
+                                  !window.confirm(
+                                    `Add another stream for “${c.name}”? (e.g. ${c.name} A and ${c.name} B). You can then move students between streams.`,
+                                  )
+                                )
+                                  return;
+                                try {
+                                  const r = await addClassStream({
+                                    data: {
+                                      schoolId: snap.school.id,
+                                      classId: c.id,
+                                    },
+                                  });
+                                  toast.success(
+                                    `Created ${r.name} ${r.newStream} (existing is ${r.sourceStream}). Move students on the class list.`,
+                                  );
+                                  void invalidate();
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : "Failed");
+                                }
+                              }}
+                            >
+                              Add stream
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-red-600"
+                              onClick={async () => {
+                                if (!window.confirm(`Delete class “${c.name}”?`)) return;
+                                try {
+                                  await deleteSchoolClass({
+                                    data: { schoolId: snap.school.id, classId: c.id },
+                                  });
+                                  toast.success("Class deleted");
+                                  void invalidate();
+                                } catch (e) {
+                                  toast.error(e instanceof Error ? e.message : "Failed");
+                                }
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </li>
                       ))}
                       {sectionClasses.length === 0 && (
@@ -783,19 +820,26 @@ function AddClassForm({
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
+  const [stream, setStream] = useState("");
   const [busy, setBusy] = useState(false);
   return (
     <form
-      className="mt-2 flex gap-2"
+      className="mt-2 flex flex-wrap gap-2"
       onSubmit={async (e) => {
         e.preventDefault();
         if (!name.trim()) return;
         setBusy(true);
         try {
           await createSchoolClass({
-            data: { schoolId, section, name: name.trim() },
+            data: {
+              schoolId,
+              section,
+              name: name.trim(),
+              stream: stream.trim() || undefined,
+            },
           });
           setName("");
+          setStream("");
           toast.success("Class added");
           onDone();
         } catch (err) {
@@ -806,9 +850,16 @@ function AddClassForm({
       }}
     >
       <Input
-        placeholder={section === "Nursery" ? "e.g. Baby class" : "Class name"}
+        placeholder={section === "Nursery" ? "e.g. Baby class" : "Class name e.g. Form 4"}
         value={name}
         onChange={(e) => setName(e.target.value)}
+        className="min-w-[8rem] flex-1"
+      />
+      <Input
+        placeholder="Stream (optional) e.g. A"
+        value={stream}
+        onChange={(e) => setStream(e.target.value.slice(0, 4))}
+        className="w-28"
       />
       <Button type="submit" size="sm" disabled={busy}>
         Add

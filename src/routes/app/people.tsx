@@ -512,9 +512,8 @@ function StaffInvite({
               ))}
             </select>
           </div>
-          {(roleName === "teacher" || roleName === "head") && (
-            <div className="sm:col-span-2 space-y-2">
-              <Label>Classes this teacher teaches</Label>
+          <div className="sm:col-span-2 space-y-2">
+              <Label>Classes this person teaches / covers</Label>
               <p className="text-xs text-muted-foreground">
                 Teachers assigned to the same class share one register. If one marks attendance,
                 the others see it for those students.
@@ -542,7 +541,6 @@ function StaffInvite({
                 ))}
               </div>
             </div>
-          )}
           <Button type="submit" disabled={busy} className="sm:col-span-2">
             {busy ? "Sending…" : "Send staff invite"}
           </Button>

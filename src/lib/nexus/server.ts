@@ -7398,3 +7398,111 @@ export const listMyTeachingClasses = createServerFn({ method: "POST" })
     `;
     return { classIds: rows.map((r) => r.class_id), scope: "teacher" as const };
   });
+
+
+/**
+ * Add a parallel stream under the same class name (e.g. Form 4 → Form 4 A + Form 4 B).
+ * If the source class has no stream, it becomes stream "A" and the new class is "B".
+ * If it already has a stream, the new stream letter is the next free letter.
+ */
+export const addClassStream = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      classId: string;
+      /** Optional explicit stream label e.g. "B", "C" */
+      newStream?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      name: string;
+      stream: string | null;
+      section: string | null;
+      level_order: number | null;
+      user_id: string;
+    }>`
+      select * from classes where id = ${data.classId} and school_id = ${data.schoolId} limit 1
+    `;
+    const cls = rows[0];
+    if (!cls) throw new Error("Class not found");
+
+    const siblings = await sql<{ id: string; stream: string | null }>`
+      select id, stream from classes
+      where school_id = ${data.schoolId} and name = ${cls.name}
+    `;
+    const used = new Set(
+      siblings.map((s) => (s.stream || "").toUpperCase()).filter(Boolean),
+    );
+
+    // Promote source to A if it had no stream
+    let sourceStream = (cls.stream || "").toUpperCase();
+    if (!sourceStream) {
+      sourceStream = "A";
+      await sql.query(`update classes set stream = $1 where id = $2`, ["A", cls.id]);
+      used.add("A");
+    }
+
+    let newStream = (data.newStream || "").trim().toUpperCase();
+    if (!newStream) {
+      const alphabet = "BCDEFGHIJKLMNOPQRSTUVWXYZ";
+      newStream = [...alphabet].find((ch) => !used.has(ch)) || `S${siblings.length + 1}`;
+    }
+    if (used.has(newStream) && newStream !== sourceStream) {
+      // allow if not used
+    }
+    if (siblings.some((s) => (s.stream || "").toUpperCase() === newStream)) {
+      throw new Error(`Stream ${newStream} already exists for ${cls.name}`);
+    }
+
+    const id = nid(context.userId, `cls-stream-${Date.now()}`);
+    await sql.query(
+      `insert into classes (id, user_id, school_id, section, name, stream, level_order)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        id,
+        cls.user_id,
+        data.schoolId,
+        cls.section,
+        cls.name,
+        newStream,
+        cls.level_order ?? 0,
+      ],
+    );
+    return {
+      ok: true,
+      sourceClassId: cls.id,
+      sourceStream,
+      newClassId: id,
+      newStream,
+      name: cls.name,
+    };
+  });
+
+/** Move students between streams of the same class name (e.g. Form 4 A ↔ Form 4 B). */
+export const moveStudentsToClass = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: { schoolId: string; studentIds: string[]; targetClassId: string }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "students.manage");
+    const sql = await getSql();
+    const target = await sql<{ id: string }>`
+      select id from classes where id = ${data.targetClassId} and school_id = ${data.schoolId} limit 1
+    `;
+    if (!target[0]) throw new Error("Target class not found");
+    let n = 0;
+    for (const sid of data.studentIds) {
+      await sql.query(
+        `update students set class_id = $1 where id = $2 and school_id = $3`,
+        [data.targetClassId, sid, data.schoolId],
+      );
+      n += 1;
+    }
+    return { ok: true, moved: n };
+  });
