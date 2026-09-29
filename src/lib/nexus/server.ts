@@ -7230,3 +7230,259 @@ export const completeStaffInvite = createServerFn({ method: "POST" })
 
     return { ok: true, schoolId: inv.school_id, roleName: roleTitle };
   });
+
+
+export const getPlatformHealth = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const schools = await sql<{ c: number }>`select count(*)::int as c from schools`;
+    const active = await sql<{ c: number }>`
+      select count(*)::int as c from schools
+      where coalesce(status,'ACTIVE') in ('ACTIVE','TRIAL')
+    `;
+    const openInv = await sql<{ c: number }>`
+      select count(*)::int as c from platform_invoices
+      where status in ('OPEN','SENT','PENDING')
+    `.catch(() => [{ c: 0 }]);
+    const overdue = await sql<{ c: number }>`
+      select count(*)::int as c from platform_invoices
+      where status = 'OVERDUE'
+    `.catch(() => [{ c: 0 }]);
+    const pendingPay = await sql<{ c: number }>`
+      select count(*)::int as c from schools where status = 'PENDING_PAYMENT'
+    `.catch(() => [{ c: 0 }]);
+    const grace = await sql<{ c: number }>`
+      select count(*)::int as c from schools
+      where status = 'DELETED_PENDING_PURGE'
+    `.catch(() => [{ c: 0 }]);
+    const jobs = await sql<{ c: number }>`
+      select count(*)::int as c from offline_jobs where status = 'PENDING'
+    `.catch(() => [{ c: 0 }]);
+
+    const env = {
+      DATABASE_URL: Boolean(process.env.DATABASE_URL),
+      BETTER_AUTH_SECRET: Boolean(process.env.BETTER_AUTH_SECRET),
+      SMTP_or_Resend: Boolean(
+        (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) ||
+          process.env.RESEND_API_KEY,
+      ),
+      PAYCHANGU: Boolean(process.env.PAYCHANGU_SECRET_KEY),
+      CRON_SECRET: Boolean(process.env.CRON_SECRET),
+      GOOGLE_OAUTH: Boolean(
+        process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
+      ),
+      HTTPSMS: Boolean(
+        process.env.PLATFORM_HTTPSMS_API_KEY || process.env.HTTPSMS_API_KEY,
+      ),
+    };
+
+    const checks = Object.entries(env).map(([id, ok]) => ({
+      id,
+      label: id,
+      status: ok ? "ok" : "warn",
+      detail: ok ? "configured" : "missing",
+    }));
+
+    return {
+      schools: schools[0]?.c ?? 0,
+      activeSchools: active[0]?.c ?? 0,
+      openInvoices: openInv[0]?.c ?? 0,
+      overdueInvoices: overdue[0]?.c ?? 0,
+      pendingPaymentSchools: pendingPay[0]?.c ?? 0,
+      graceSchools: grace[0]?.c ?? 0,
+      jobsPending: jobs[0]?.c ?? 0,
+      sms7d: 0,
+      env,
+      checks,
+      cronHint:
+        "Call GET /api/cron?job=all with Authorization: Bearer $CRON_SECRET (or ?secret=) for invoices, reminders, overdue, queue.",
+      at: new Date().toISOString(),
+    };
+  });
+
+export const listPlatformSupport = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const tickets = await sql<Record<string, unknown>>`
+      select * from support_tickets order by created_at desc limit 50
+    `.catch(() => [] as Record<string, unknown>[]);
+    return { tickets };
+  });
+
+export const resendSchoolInvite = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const schools = await sql<{
+      id: string;
+      name: string;
+      owner_name: string | null;
+      owner_email: string | null;
+      invite_token: string | null;
+      invite_expires_at: string | null;
+    }>`
+      select id, name, owner_name, owner_email, invite_token, invite_expires_at
+      from schools where id = ${data.schoolId} limit 1
+    `;
+    const school = schools[0];
+    if (!school) throw new Error("School not found");
+    if (!school.owner_email) throw new Error("School has no owner email");
+
+    let token = school.invite_token;
+    const expired =
+      !token ||
+      (school.invite_expires_at &&
+        new Date(school.invite_expires_at).getTime() < Date.now());
+    if (expired) {
+      token = randomToken(24);
+      const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await sql.query(
+        `update schools set invite_token = $1, invite_expires_at = $2 where id = $3`,
+        [token, expires.toISOString(), school.id],
+      );
+    }
+
+    const base =
+      process.env.BETTER_AUTH_URL ||
+      process.env.VITE_APP_URL ||
+      "http://localhost:8080";
+    const inviteLink = `${base.replace(/\/$/, "")}/set-password?token=${token}`;
+
+    const { sendEmail, schoolInviteEmail } = await import("./email");
+    const body = schoolInviteEmail({
+      ownerName: school.owner_name || "School owner",
+      schoolName: school.name,
+      inviteLink,
+    });
+    const emailResult = await sendEmail({
+      to: school.owner_email,
+      subject: body.subject,
+      html: body.html,
+      text: body.text,
+      fromName: "NEXUS",
+      replyTo: undefined,
+    });
+    return { ok: true, inviteLink, emailSent: emailResult.ok };
+  });
+
+export const getSchoolHealth = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    const students = await sql<{ c: number }>`
+      select count(*)::int as c from students where school_id = ${data.schoolId}
+    `;
+    const staff = await sql<{ c: number }>`
+      select count(*)::int as c from staff where school_id = ${data.schoolId}
+    `.catch(() => [{ c: 0 }]);
+    const classes = await sql<{ c: number }>`
+      select count(*)::int as c from classes where school_id = ${data.schoolId}
+    `;
+    const charges = await sql<{ c: number }>`
+      select count(*)::int as c from student_charges
+      where school_id = ${data.schoolId} and status = 'UNPAID'
+    `.catch(() => [{ c: 0 }]);
+    const school = await sql<{
+      name: string;
+      status: string | null;
+      setup_progress: unknown;
+    }>`
+      select name, status, setup_progress from schools where id = ${data.schoolId} limit 1
+    `;
+    return {
+      schoolName: school[0]?.name,
+      status: school[0]?.status || "ACTIVE",
+      students: students[0]?.c ?? 0,
+      staff: staff[0]?.c ?? 0,
+      classes: classes[0]?.c ?? 0,
+      unpaidCharges: charges[0]?.c ?? 0,
+      setup: school[0]?.setup_progress,
+      at: new Date().toISOString(),
+    };
+  });
+
+export const listSchoolAudit = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; limit?: number }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    const limit = Math.min(data.limit || 50, 200);
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = await sql<Record<string, unknown>>`
+        select * from audit_log
+        where school_id = ${data.schoolId}
+        order by created_at desc
+        limit ${limit}
+      `;
+    } catch {
+      try {
+        rows = await sql<Record<string, unknown>>`
+          select * from audit_logs
+          where school_id = ${data.schoolId}
+          order by created_at desc
+          limit ${limit}
+        `;
+      } catch {
+        rows = [];
+      }
+    }
+    return { rows };
+  });
+
+export const exportSchoolBackup = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const sid = data.schoolId;
+    const school = await sql`select * from schools where id = ${sid} limit 1`;
+    const classes = await sql`select * from classes where school_id = ${sid}`;
+    const students = await sql`select * from students where school_id = ${sid}`;
+    const parents = await sql`select * from parents where school_id = ${sid}`.catch(
+      () => [],
+    );
+    const subjects = await sql`select * from subjects where school_id = ${sid}`.catch(
+      () => [],
+    );
+    const terms = await sql`select * from terms where school_id = ${sid}`.catch(() => []);
+    const results = await sql`select * from results where school_id = ${sid}`.catch(
+      () => [],
+    );
+    const charges = await sql`select * from student_charges where school_id = ${sid}`.catch(
+      () => [],
+    );
+    const payments = await sql`select * from payments where school_id = ${sid}`.catch(
+      () => [],
+    );
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      school: school[0] || null,
+      classes,
+      students,
+      parents,
+      subjects,
+      terms,
+      results,
+      charges,
+      payments,
+    };
+    return {
+      ok: true,
+      filename: `nexus-backup-${sid.slice(0, 8)}-${Date.now()}.json`,
+      json: JSON.stringify(payload),
+    };
+  });
