@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader, StatCard } from "@/components/page-header";
@@ -83,9 +83,18 @@ function openReceiptWindow(rd: Awaited<ReturnType<typeof getReceiptData>>) {
   w.document.close();
 }
 
-export const Route = createFileRoute("/app/finance")({ component: FinancePage });
+export const Route = createFileRoute("/app/finance")({
+  component: FinancePage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    from: typeof search.from === "string" ? search.from : undefined,
+  }),
+});
+
 
 function FinancePage() {
+  const financeSearch = Route.useSearch() as { from?: string };
+  const fromSetup = financeSearch?.from === "setup";
+
   const q = useSnapshot();
   const persona = useNexusSession((s) => s.persona);
   if (q.isPending) return <Skeleton className="h-80" />;
@@ -106,7 +115,7 @@ function StaffFinance({ snap }: { snap: Snapshot }) {
   } | null>(null);
   const [feeName, setFeeName] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
-  const [feeClass, setFeeClass] = useState("");
+  const [feeClassIds, setFeeClassIds] = useState<string[]>([]);
   const [feeDue, setFeeDue] = useState("");
   const [report, setReport] = useState<Awaited<ReturnType<typeof financeReport>> | null>(null);
   // Complete PayChangu return once
@@ -183,7 +192,23 @@ function StaffFinance({ snap }: { snap: Snapshot }) {
         </section>
       )}
 
-      <Tabs defaultValue="charges" className="mt-6">
+      {fromSetup ? (
+        <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          You opened Finance from the <strong>school setup wizard</strong>. After you create fee
+          structures, you will be sent back to the wizard to Save & continue.
+          <Button
+            type="button"
+            variant="link"
+            className="ml-2 h-auto p-0"
+            onClick={() => {
+              window.location.href = "/app/setup?step=fees&feesConfigured=1";
+            }}
+          >
+            Return to wizard now
+          </Button>
+        </div>
+      ) : null}
+      <Tabs defaultValue="structures" className="mt-6">
         <TabsList>
           <TabsTrigger value="charges">Charges</TabsTrigger>
           <TabsTrigger value="structures">Fee structures</TabsTrigger>
@@ -256,20 +281,39 @@ function StaffFinance({ snap }: { snap: Snapshot }) {
                   onChange={(e) => setFeeAmount(e.target.value)}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Class (optional = all)</Label>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={feeClass}
-                  onChange={(e) => setFeeClass(e.target.value)}
-                >
-                  <option value="">All students</option>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Classes (tick several for the same fee amount)</Label>
+                <p className="text-[11px] text-muted-foreground">
+                  Leave none selected to apply to every class. Or tick Standard 1–8 and Form 4 together for one development fee.
+                </p>
+                <div className="mt-1 flex flex-wrap gap-2 max-h-40 overflow-y-auto rounded-md border border-border p-2">
+                  <label className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={feeClassIds.length === 0}
+                      onChange={() => setFeeClassIds([])}
+                    />
+                    All classes
+                  </label>
                   {snap.classes.map((c) => (
-                    <option key={c.id} value={c.id}>
+                    <label
+                      key={c.id}
+                      className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={feeClassIds.includes(c.id)}
+                        onChange={() => {
+                          setFeeClassIds((prev) => {
+                            if (prev.includes(c.id)) return prev.filter((id) => id !== c.id);
+                            return [...prev, c.id];
+                          });
+                        }}
+                      />
                       {classLabel(c)}
-                    </option>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label>Due date</Label>
@@ -290,20 +334,34 @@ function StaffFinance({ snap }: { snap: Snapshot }) {
                       schoolId: snap.school.id,
                       name: feeName,
                       amount: Number(feeAmount),
-                      classId: feeClass || undefined,
+                      classIds: feeClassIds.length ? feeClassIds : undefined,
                       termId: term?.id,
                       dueDate: feeDue || undefined,
                       mandatory: true,
                     },
                   });
-                  toast.success("Fee structure created");
-                  const apply = await applyFeeStructure({
-                    data: { schoolId: snap.school.id, feeStructureId: res.id },
-                  });
-                  toast.success(`Charged ${apply.created} student(s)`);
+                  const ids = res.ids || [res.id];
+                  let charged = 0;
+                  for (const fid of ids) {
+                    const apply = await applyFeeStructure({
+                      data: { schoolId: snap.school.id, feeStructureId: fid },
+                    });
+                    charged += apply.created;
+                  }
+                  toast.success(
+                    `Created ${ids.length} structure(s), charged ${charged} student(s)`,
+                  );
                   setFeeName("");
                   setFeeAmount("");
+                  setFeeClassIds([]);
                   await invalidate();
+                  if (typeof window !== "undefined") {
+                    const from = new URLSearchParams(window.location.search).get("from");
+                    if (from === "setup") {
+                      window.location.href = "/app/setup?step=fees&feesConfigured=1";
+                      return;
+                    }
+                  }
                 } catch (e) {
                   toast.error(e instanceof Error ? e.message : "Failed");
                 }

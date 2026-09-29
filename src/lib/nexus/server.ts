@@ -3514,6 +3514,8 @@ export const createFeeStructure = createServerFn({ method: "POST" })
       name: string;
       amount: number;
       classId?: string;
+      /** Create the same fee for many classes at once */
+      classIds?: string[];
       termId?: string;
       dueDate?: string;
       mandatory?: boolean;
@@ -3527,28 +3529,39 @@ export const createFeeStructure = createServerFn({ method: "POST" })
     const sql = await getSql();
     const school = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
     const uid = school[0]?.user_id || context.userId;
-    const id = nid(context.userId, `fee-${Date.now()}`);
-    await sql.query(
-      `insert into fee_structures (
-         id, user_id, school_id, name, class_id, term_id, amount, due_date,
-         mandatory, late_fee_amount, late_fee_after_days, description
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [
-        id,
-        uid,
-        data.schoolId,
-        data.name.trim(),
-        data.classId || null,
-        data.termId || null,
-        data.amount,
-        data.dueDate || null,
-        data.mandatory !== false,
-        data.lateFeeAmount ?? 0,
-        data.lateFeeAfterDays ?? 0,
-        data.description || null,
-      ],
-    );
-    return { ok: true, id };
+    const classIds =
+      data.classIds && data.classIds.length > 0
+        ? data.classIds
+        : data.classId
+          ? [data.classId]
+          : [null as string | null];
+    const ids: string[] = [];
+    for (let i = 0; i < classIds.length; i++) {
+      const classId = classIds[i];
+      const id = nid(context.userId, `fee-${Date.now()}-${i}`);
+      await sql.query(
+        `insert into fee_structures (
+           id, user_id, school_id, name, class_id, term_id, amount, due_date,
+           mandatory, late_fee_amount, late_fee_after_days, description
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          id,
+          uid,
+          data.schoolId,
+          data.name.trim(),
+          classId,
+          data.termId || null,
+          data.amount,
+          data.dueDate || null,
+          data.mandatory !== false,
+          data.lateFeeAmount ?? 0,
+          data.lateFeeAfterDays ?? 0,
+          data.description || null,
+        ],
+      );
+      ids.push(id);
+    }
+    return { ok: true, id: ids[0]!, ids };
   });
 
 /** Apply a fee structure to all students in its class (or whole school if no class). */

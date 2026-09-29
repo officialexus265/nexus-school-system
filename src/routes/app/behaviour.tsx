@@ -16,9 +16,18 @@ import { defaultParent, parentChildren } from "@/lib/nexus/selectors";
 import { formatDate, studentName } from "@/lib/utils";
 import { useNexusSession } from "@/stores/session";
 
-export const Route = createFileRoute("/app/behaviour")({ component: BehaviourPage });
+export const Route = createFileRoute("/app/behaviour")({
+  component: BehaviourPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    from: typeof search.from === "string" ? search.from : undefined,
+  }),
+});
+
 
 function BehaviourPage() {
+  const behaviourSearch = Route.useSearch() as { from?: string };
+  const fromSetup = behaviourSearch?.from === "setup";
+
   const q = useSnapshot();
   const persona = useNexusSession((s) => s.persona);
   if (q.isPending) return <Skeleton className="h-64" />;
@@ -57,6 +66,21 @@ function BehaviourPage() {
 
   return (
     <div>
+      {fromSetup ? (
+        <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          You opened Behaviour from the school setup wizard.{" "}
+          <button
+            type="button"
+            className="font-medium underline"
+            onClick={() => {
+              window.location.href = "/app/setup?step=behaviour&behaviourConfigured=1";
+            }}
+          >
+            Return to wizard
+          </button>
+        </div>
+      ) : null}
+
       <PageHeader
         kicker="Pastoral"
         title="Behaviour"

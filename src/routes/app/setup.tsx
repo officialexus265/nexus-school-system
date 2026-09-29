@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
@@ -24,7 +24,16 @@ import {
 import { extractColorsFromImageDataUrl } from "@/lib/nexus/logo-colors";
 
 
-export const Route = createFileRoute("/app/setup")({ component: SetupWizardPage });
+export const Route = createFileRoute("/app/setup")({
+  component: SetupWizardPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    step: typeof search.step === "string" ? search.step : undefined,
+    feesConfigured: search.feesConfigured === "1" || search.feesConfigured === true,
+    behaviourConfigured:
+      search.behaviourConfigured === "1" || search.behaviourConfigured === true,
+  }),
+});
+
 
 type StepKey =
   | "profile"
@@ -1033,17 +1042,41 @@ function SetupWizardPage() {
 
 
         {current.key === "fees" && (
-          <p className="mt-4 text-sm text-muted-foreground">
-            Create detailed fee structures under Finance. This step marks that you have reviewed fee
-            setup for the term.
-          </p>
+          <div className="mt-4 space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              Open Finance to create fee structures (you can assign one amount to many classes at
+              once). When you save there, you return here to continue the wizard.
+            </p>
+            {search?.feesConfigured ? (
+              <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-emerald-800 dark:text-emerald-200">
+                Fee setup visited — click Save & continue when you are ready.
+              </p>
+            ) : null}
+            <Button asChild variant="secondary">
+              <Link to="/app/finance" search={{ from: "setup" } as any}>
+                Set fees in Finance
+              </Link>
+            </Button>
+          </div>
         )}
 
         {current.key === "behaviour" && (
-          <p className="mt-4 text-sm text-muted-foreground">
-            Positive and negative categories can be extended under Behaviour. Confirm defaults are
-            acceptable for launch.
-          </p>
+          <div className="mt-4 space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              Open Behaviour to review categories and how incidents are logged. After you save or
+              review there, you return here to continue.
+            </p>
+            {search?.behaviourConfigured ? (
+              <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-emerald-800 dark:text-emerald-200">
+                Behaviour page visited — click Save & continue when you are ready.
+              </p>
+            ) : null}
+            <Button asChild variant="secondary">
+              <Link to="/app/behaviour" search={{ from: "setup" } as any}>
+                Set behaviour rules
+              </Link>
+            </Button>
+          </div>
         )}
 
         {current.key === "parent_app" && (
