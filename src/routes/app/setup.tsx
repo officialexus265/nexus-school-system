@@ -13,7 +13,10 @@ import {
   saveWizardAcademics,
   updateSchool,
   updateSetupProgress,
+  uploadSchoolFile,
 } from "@/lib/nexus/server";
+import { extractColorsFromImageDataUrl } from "@/lib/nexus/logo-colors";
+
 
 export const Route = createFileRoute("/app/setup")({ component: SetupWizardPage });
 
@@ -28,7 +31,7 @@ type StepKey =
 
 const STEPS: { key: StepKey; progressKey: string; title: string; blurb: string }[] = [
   { key: "profile", progressKey: "profile_done", title: "School profile", blurb: "Contact details and motto" },
-  { key: "branding", progressKey: "branding_done", title: "Branding", blurb: "Logo mark and colours" },
+  { key: "branding", progressKey: "branding_done", title: "Branding", blurb: "Logo, colours for parent app" },
   { key: "academics", progressKey: "academics_done", title: "Academics", blurb: "Select classes and subjects" },
   { key: "grading", progressKey: "grading_done", title: "Grading", blurb: "Confirm grading approach" },
   { key: "fees", progressKey: "fees_done", title: "Fees", blurb: "Confirm fee structures exist" },
@@ -84,8 +87,13 @@ function SetupWizardPage() {
   const [email, setEmail] = useState("");
 
   const [logoMark, setLogoMark] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [suggestedColors, setSuggestedColors] = useState<string[]>([]);
   const [primaryColor, setPrimaryColor] = useState("#0f766e");
+  const [secondaryColor, setSecondaryColor] = useState("#134e4a");
   const [appName, setAppName] = useState("");
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
   const [nurseryClasses, setNurseryClasses] = useState<string[]>(["Baby class", "Reception"]);
@@ -110,7 +118,10 @@ function SetupWizardPage() {
     setPhone(school.phone ?? "");
     setEmail(school.email ?? "");
     setLogoMark(school.logo_mark ?? school.name.slice(0, 2).toUpperCase());
+    setLogoUrl((school as { logo_url?: string }).logo_url ?? "");
+    setLogoPreview((school as { logo_url?: string }).logo_url ?? null);
     setPrimaryColor(school.primary_color ?? "#0f766e");
+    setSecondaryColor(school.secondary_color ?? "#134e4a");
     setAppName(school.parent_app_name ?? `${school.name} Parent`);
     getSetupProgress({ data: { schoolId: school.id } })
       .then((p) => {
@@ -183,7 +194,9 @@ function SetupWizardPage() {
             schoolId: school.id,
             appName: appName || `${school.name} Parent`,
             primaryColor,
+            secondaryColor,
             logoMark,
+            logoUrl: logoUrl || undefined,
           },
         });
         await markDone("branding_done");
@@ -240,7 +253,9 @@ function SetupWizardPage() {
             schoolId: school.id,
             appName: appName || `${school.name} Parent`,
             primaryColor,
+            secondaryColor,
             logoMark,
+            logoUrl: logoUrl || undefined,
           },
         });
         await markDone("parent_app_done");
@@ -322,25 +337,198 @@ function SetupWizardPage() {
         )}
 
         {current.key === "branding" && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Logo mark (1–3 letters)</Label>
-              <Input
-                value={logoMark}
-                onChange={(e) => setLogoMark(e.target.value.slice(0, 3))}
-              />
+          <div className="mt-4 space-y-5">
+            <div className="space-y-2">
+              <Label>School logo</Label>
+              <p className="text-xs text-muted-foreground">
+                Upload your crest or logo for the parent app icon and headers. We suggest brand
+                colours from the image — you can change them.
+              </p>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex size-20 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted">
+                  {logoPreview ? (
+                    <img src={logoPreview} alt="Logo preview" className="size-full object-contain" />
+                  ) : (
+                    <span className="font-display text-2xl font-semibold" style={{ color: primaryColor }}>
+                      {logoMark || "?"}
+                    </span>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    disabled={uploadingLogo}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file || !school) return;
+                      if (file.size > 2.5 * 1024 * 1024) {
+                        toast.error("Logo must be under 2.5 MB");
+                        return;
+                      }
+                      setUploadingLogo(true);
+                      try {
+                        const reader = new FileReader();
+                        const dataUrl: string = await new Promise((resolve, reject) => {
+                          reader.onload = () => resolve(String(reader.result));
+                          reader.onerror = () => reject(new Error("Read failed"));
+                          reader.readAsDataURL(file);
+                        });
+                        setLogoPreview(dataUrl);
+                        try {
+                          const colors = await extractColorsFromImageDataUrl(dataUrl);
+                          setSuggestedColors(colors);
+                          if (colors[0]) setPrimaryColor(colors[0]);
+                          if (colors[1]) setSecondaryColor(colors[1]);
+                          else if (colors[0]) setSecondaryColor(colors[0]);
+                          toast.message("Colours suggested from logo — adjust if needed");
+                        } catch {
+                          /* colour extract optional */
+                        }
+                        try {
+                          const uploaded = await uploadSchoolFile({
+                            data: {
+                              schoolId: school.id,
+                              purpose: "logo",
+                              dataBase64: dataUrl,
+                              filename: file.name,
+                              mimeType: file.type,
+                            },
+                          });
+                          setLogoUrl(uploaded.url);
+                          setLogoPreview(uploaded.url);
+                        } catch (uploadErr) {
+                          // Keep local preview; still usable for colour suggestions offline
+                          toast.message(
+                            uploadErr instanceof Error
+                              ? `${uploadErr.message} — colours still applied from preview`
+                              : "Upload deferred; colours applied from preview",
+                          );
+                        }
+                        if (!logoMark) {
+                          setLogoMark(school.name.slice(0, 2).toUpperCase());
+                        }
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "Could not read logo");
+                      } finally {
+                        setUploadingLogo(false);
+                        e.target.value = "";
+                      }
+                    }}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    PNG, JPG or WebP · max 2.5 MB
+                    {uploadingLogo ? " · Uploading…" : ""}
+                  </p>
+                </div>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>Primary colour</Label>
-              <Input
-                type="color"
-                value={primaryColor}
-                onChange={(e) => setPrimaryColor(e.target.value)}
-              />
+
+            {suggestedColors.length > 0 && (
+              <div className="space-y-2">
+                <Label>Suggested colours from logo</Label>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedColors.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      title={`Use ${c}`}
+                      className="flex flex-col items-center gap-1 rounded-md border border-border p-1.5 text-[10px] hover:bg-secondary"
+                      onClick={() => {
+                        setPrimaryColor(c);
+                        toast.success(`Primary set to ${c}`);
+                      }}
+                      onContextMenu={(ev) => {
+                        ev.preventDefault();
+                        setSecondaryColor(c);
+                        toast.success(`Secondary set to ${c}`);
+                      }}
+                    >
+                      <span
+                        className="size-9 rounded-md border border-border shadow-sm"
+                        style={{ backgroundColor: c }}
+                      />
+                      <span className="font-mono">{c}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Tap a swatch for primary colour · long-press / right-click for secondary
+                </p>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Primary colour</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="color"
+                    value={primaryColor}
+                    onChange={(e) => setPrimaryColor(e.target.value)}
+                    className="h-10 w-14 cursor-pointer p-1"
+                  />
+                  <Input
+                    value={primaryColor}
+                    onChange={(e) => setPrimaryColor(e.target.value)}
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Secondary colour</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="color"
+                    value={secondaryColor}
+                    onChange={(e) => setSecondaryColor(e.target.value)}
+                    className="h-10 w-14 cursor-pointer p-1"
+                  />
+                  <Input
+                    value={secondaryColor}
+                    onChange={(e) => setSecondaryColor(e.target.value)}
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Logo mark (1–3 letters, fallback if no image)</Label>
+                <Input
+                  value={logoMark}
+                  onChange={(e) => setLogoMark(e.target.value.slice(0, 3))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Parent app name</Label>
+                <Input value={appName} onChange={(e) => setAppName(e.target.value)} />
+              </div>
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label>Parent app name</Label>
-              <Input value={appName} onChange={(e) => setAppName(e.target.value)} />
+
+            <div
+              className="rounded-xl border border-border p-4"
+              style={{
+                background: `linear-gradient(135deg, ${primaryColor}22, ${secondaryColor}33)`,
+              }}
+            >
+              <p className="text-xs font-medium text-muted-foreground">Parent app preview</p>
+              <div className="mt-2 flex items-center gap-3">
+                <div
+                  className="flex size-12 items-center justify-center overflow-hidden rounded-xl text-white shadow"
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  {logoPreview ? (
+                    <img src={logoPreview} alt="" className="size-full object-contain" />
+                  ) : (
+                    <span className="text-lg font-bold">{logoMark || "N"}</span>
+                  )}
+                </div>
+                <div>
+                  <p className="font-medium" style={{ color: primaryColor }}>
+                    {appName || `${school?.name || "School"} Parent`}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Branded parent experience</p>
+                </div>
+              </div>
             </div>
           </div>
         )}

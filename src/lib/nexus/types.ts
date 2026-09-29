@@ -46,6 +46,7 @@ export type School = {
   boarding_status: string | null;
   status: SchoolStatus;
   logo_mark: string | null;
+  logo_url?: string | null;
   primary_color: string | null;
   secondary_color: string | null;
   timezone: string | null;

@@ -1127,6 +1127,7 @@ export const publishParentApp = createServerFn({ method: "POST" })
       primaryColor?: string;
       secondaryColor?: string;
       logoMark?: string;
+      logoUrl?: string;
       resultsEnabled?: boolean;
       attendanceEnabled?: boolean;
       behaviourEnabled?: boolean;
@@ -1174,15 +1175,17 @@ export const publishParentApp = createServerFn({ method: "POST" })
       "http://localhost:8080";
     const installUrl = `${baseUrl.replace(/\/$/, "")}/p/${slug}`;
 
+    const logoUrl = data.logoUrl?.trim() || (school as { logo_url?: string }).logo_url || null;
     await sql.query(
       `update schools set
          parent_app_name = $1,
          parent_app_slug = $2,
          primary_color = $3,
          secondary_color = $4,
-         logo_mark = $5
+         logo_mark = $5,
+         logo_url = coalesce($7, logo_url)
        where id = $6`,
-      [appName, slug, primary, secondary, logoMark, school.id],
+      [appName, slug, primary, secondary, logoMark, school.id, logoUrl],
     );
 
     // Upsert parent_app_settings
@@ -1207,7 +1210,8 @@ export const publishParentApp = createServerFn({ method: "POST" })
            calendar_enabled = $11,
            published_at = now(),
            install_url = $12,
-           updated_at = now()
+           updated_at = now(),
+           logo_url = coalesce($14, logo_url)
          where school_id = $13`,
         [
           appName,
@@ -1223,6 +1227,7 @@ export const publishParentApp = createServerFn({ method: "POST" })
           data.calendarEnabled ?? true,
           installUrl,
           school.id,
+          logoUrl,
         ],
       );
     } else {
@@ -1231,12 +1236,12 @@ export const publishParentApp = createServerFn({ method: "POST" })
            id, school_id, app_name, primary_color, secondary_color, splash_color,
            results_enabled, attendance_enabled, behaviour_enabled, fees_enabled,
            assignments_enabled, messages_enabled, documents_enabled, calendar_enabled,
-           published_at, install_url
+           published_at, install_url, logo_url
          ) values (
            $1,$2,$3,$4,$5,$4,
            $6,$7,$8,$9,
            $10,$11,$12,$13,
-           now(),$14
+           now(),$14,$15
          )`,
         [
           settingsId,
@@ -1253,6 +1258,7 @@ export const publishParentApp = createServerFn({ method: "POST" })
           data.documentsEnabled ?? true,
           data.calendarEnabled ?? true,
           installUrl,
+          logoUrl,
         ],
       );
     }
