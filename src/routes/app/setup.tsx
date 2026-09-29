@@ -11,10 +11,16 @@ import {
   getSetupProgress,
   publishParentApp,
   saveWizardAcademics,
+  saveWizardGrading,
   updateSchool,
   updateSetupProgress,
   uploadSchoolFile,
 } from "@/lib/nexus/server";
+import {
+  MANEB_POINTS_BANDS,
+  PRIMARY_LETTER_BANDS,
+  SECONDARY_JUNIOR_LETTER_BANDS,
+} from "@/lib/nexus/grading-templates";
 import { extractColorsFromImageDataUrl } from "@/lib/nexus/logo-colors";
 
 
@@ -73,6 +79,63 @@ const DEFAULT_SUBJECTS = [
   { name: "Life Skills", code: "LS" },
 ];
 
+
+type BandEdit = {
+  grade: string;
+  min: number;
+  max: number;
+  points?: number | null;
+  remark?: string;
+};
+
+type ScaleEdit = {
+  name: string;
+  section?: string;
+  system: "letter" | "points_1_9" | "custom";
+  appliesTo?: string;
+  continuousWeight?: number;
+  examWeight?: number;
+  isDefault?: boolean;
+  bands: BandEdit[];
+};
+
+/** Starting templates — school edits every band. MANEB-style 1–9 for secondary. */
+function defaultGradingScalesTemplate(): ScaleEdit[] {
+  return [
+    {
+      name: "Primary (letters A–F)",
+      section: "Primary",
+      system: "letter",
+      appliesTo: "Primary classes",
+      isDefault: true,
+      continuousWeight: 40,
+      examWeight: 60,
+      bands: PRIMARY_LETTER_BANDS.map((b) => ({ ...b })),
+    },
+    {
+      name: "Nursery",
+      section: "Nursery",
+      system: "custom",
+      appliesTo: "Nursery classes",
+      bands: [],
+    },
+    {
+      name: "Secondary Form 1–2 (letters A–F)",
+      section: "Secondary",
+      system: "letter",
+      appliesTo: "Form 1 and Form 2",
+      bands: SECONDARY_JUNIOR_LETTER_BANDS.map((b) => ({ ...b })),
+    },
+    {
+      name: "Secondary Form 3–4 (MANEB-style points 1–9)",
+      section: "Secondary",
+      system: "points_1_9",
+      appliesTo: "Form 3 and Form 4 (MSCE-oriented)",
+      bands: MANEB_POINTS_BANDS.map((b) => ({ ...b })),
+    },
+  ];
+}
+
 function SetupWizardPage() {
   const q = useSnapshot();
   const invalidate = useInvalidateSnapshot();
@@ -99,18 +162,19 @@ function SetupWizardPage() {
   const [nurseryClasses, setNurseryClasses] = useState<string[]>(["Baby class", "Reception"]);
   const [nurseryDraft, setNurseryDraft] = useState("");
   const [selectedSubjects, setSelectedSubjects] = useState<
-    { name: string; code: string; section: string }[]
+    { name: string; code: string; section: string; classNames: string[] }[]
   >([
-    { name: "Mathematics", code: "MATH", section: "Primary" },
-    { name: "English", code: "ENG", section: "Primary" },
-    { name: "Science", code: "SCI", section: "Primary" },
-    { name: "Mathematics", code: "MATH", section: "Secondary" },
-    { name: "English", code: "ENG", section: "Secondary" },
-    { name: "Play / Activity", code: "PLAY", section: "Nursery" },
+    { name: "Mathematics", code: "MATH", section: "Primary", classNames: [] },
+    { name: "English", code: "ENG", section: "Primary", classNames: [] },
+    { name: "Science", code: "SCI", section: "Primary", classNames: [] },
+    { name: "Mathematics", code: "MATH", section: "Secondary", classNames: [] },
+    { name: "English", code: "ENG", section: "Secondary", classNames: [] },
+    { name: "Play / Activity", code: "PLAY", section: "Nursery", classNames: [] },
   ]);
   const [customSubjectName, setCustomSubjectName] = useState("");
   const [customSubjectCode, setCustomSubjectCode] = useState("");
   const [customSubjectSection, setCustomSubjectSection] = useState("Primary");
+  const [customSubjectClasses, setCustomSubjectClasses] = useState<string[]>([]);
 
   useEffect(() => {
     if (!school) return;
@@ -229,6 +293,7 @@ function SetupWizardPage() {
           name: s.name,
           code: s.code,
           section: s.section,
+          classNames: s.classNames || [],
         }));
         if (subjects.length < 1) {
           toast.error("Add at least one subject");
@@ -239,8 +304,14 @@ function SetupWizardPage() {
         await markDone("academics_done");
         toast.success(`${classes.length} class(es) and ${subjects.length} subject(s) saved`);
       } else if (current.key === "grading") {
+        await saveWizardGrading({
+          data: {
+            schoolId: school.id,
+            scales: gradingScales,
+          },
+        });
         await markDone("grading_done");
-        toast.success("Grading step confirmed");
+        toast.success("Grading scales saved — edit anytime under Academics");
       } else if (current.key === "fees") {
         await markDone("fees_done");
         toast.success("Fees step confirmed — configure amounts under Finance");
@@ -663,6 +734,11 @@ function SetupWizardPage() {
                     <span className="rounded bg-secondary px-2 py-0.5 text-xs">{s.section}</span>
                     <span className="flex-1">
                       {s.name} {s.code ? `(${s.code})` : ""}
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {s.classNames?.length
+                          ? `Classes: ${s.classNames.join(", ")}`
+                          : "All classes in section"}
+                      </span>
                     </span>
                     <Button
                       type="button"
@@ -697,6 +773,38 @@ function SetupWizardPage() {
                   <option value="Primary">Primary</option>
                   <option value="Secondary">Secondary</option>
                 </select>
+
+              <div className="sm:col-span-4 space-y-2 rounded-md border border-border p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Classes this subject is taught in (optional — leave empty for all in section)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(customSubjectSection === "Nursery"
+                    ? nurseryClasses
+                    : customSubjectSection === "Primary"
+                      ? PRIMARY_CLASSES.map((c) => c.name)
+                      : SECONDARY_CLASSES.map((c) => c.name)
+                  ).map((cn) => (
+                    <label
+                      key={cn}
+                      className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={customSubjectClasses.includes(cn)}
+                        onChange={() =>
+                          setCustomSubjectClasses((prev) =>
+                            prev.includes(cn)
+                              ? prev.filter((x) => x !== cn)
+                              : [...prev, cn],
+                          )
+                        }
+                      />
+                      {cn}
+                    </label>
+                  ))}
+                </div>
+              </div>
                 <Button
                   type="button"
                   variant="outline"
@@ -709,10 +817,12 @@ function SetupWizardPage() {
                         name,
                         code: customSubjectCode.trim() || name.slice(0, 4).toUpperCase(),
                         section: customSubjectSection,
+                        classNames: [...customSubjectClasses],
                       },
                     ]);
                     setCustomSubjectName("");
                     setCustomSubjectCode("");
+                    setCustomSubjectClasses([]);
                   }}
                 >
                   Add subject
@@ -723,11 +833,204 @@ function SetupWizardPage() {
         )}
 
         {current.key === "grading" && (
-          <p className="mt-4 text-sm text-muted-foreground">
-            Default scale uses percentage bands (A–F). Fine-tune weighting later under Academics /
-            Results. Confirm to continue.
-          </p>
+          <div className="mt-4 space-y-6">
+            <p className="text-sm text-muted-foreground">
+              Each school defines its own scales. Starters:{" "}
+              <strong>Primary and Form 1–2 use letters A–F; Nursery starts blank</strong>;{" "}
+              <strong>Form 3–4</strong> starts from a MANEB-style <strong>points 1–9</strong> map
+              (1 best, 9 fail). All bands are examples only — edit everything to match your school.
+            </p>
+            {gradingScales.map((scale, si) => (
+              <div
+                key={scale.name + si}
+                className="rounded-xl border border-border p-4 space-y-3"
+              >
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>Scale name</Label>
+                    <Input
+                      value={scale.name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setGradingScales((prev) =>
+                          prev.map((x, i) => (i === si ? { ...x, name: v } : x)),
+                        );
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Applies to</Label>
+                    <Input
+                      value={scale.appliesTo || ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setGradingScales((prev) =>
+                          prev.map((x, i) => (i === si ? { ...x, appliesTo: v } : x)),
+                        );
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-left text-xs">
+                    <thead className="text-muted-foreground">
+                      <tr>
+                        <th className="py-1 pr-2">Grade / point</th>
+                        <th className="py-1 pr-2">Min %</th>
+                        <th className="py-1 pr-2">Max %</th>
+                        <th className="py-1 pr-2">Points</th>
+                        <th className="py-1">Remark</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scale.bands.map((b, bi) => (
+                        <tr key={bi} className="border-t border-border">
+                          <td className="py-1 pr-2">
+                            <Input
+                              className="h-8"
+                              value={b.grade}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setGradingScales((prev) =>
+                                  prev.map((x, i) =>
+                                    i !== si
+                                      ? x
+                                      : {
+                                          ...x,
+                                          bands: x.bands.map((bb, j) =>
+                                            j === bi ? { ...bb, grade: v } : bb,
+                                          ),
+                                        },
+                                  ),
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1 pr-2">
+                            <Input
+                              className="h-8"
+                              type="number"
+                              value={b.min}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setGradingScales((prev) =>
+                                  prev.map((x, i) =>
+                                    i !== si
+                                      ? x
+                                      : {
+                                          ...x,
+                                          bands: x.bands.map((bb, j) =>
+                                            j === bi ? { ...bb, min: v } : bb,
+                                          ),
+                                        },
+                                  ),
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1 pr-2">
+                            <Input
+                              className="h-8"
+                              type="number"
+                              value={b.max}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setGradingScales((prev) =>
+                                  prev.map((x, i) =>
+                                    i !== si
+                                      ? x
+                                      : {
+                                          ...x,
+                                          bands: x.bands.map((bb, j) =>
+                                            j === bi ? { ...bb, max: v } : bb,
+                                          ),
+                                        },
+                                  ),
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1 pr-2">
+                            <Input
+                              className="h-8"
+                              type="number"
+                              value={b.points ?? ""}
+                              onChange={(e) => {
+                                const v =
+                                  e.target.value === "" ? null : Number(e.target.value);
+                                setGradingScales((prev) =>
+                                  prev.map((x, i) =>
+                                    i !== si
+                                      ? x
+                                      : {
+                                          ...x,
+                                          bands: x.bands.map((bb, j) =>
+                                            j === bi ? { ...bb, points: v } : bb,
+                                          ),
+                                        },
+                                  ),
+                                );
+                              }}
+                            />
+                          </td>
+                          <td className="py-1">
+                            <Input
+                              className="h-8"
+                              value={b.remark || ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setGradingScales((prev) =>
+                                  prev.map((x, i) =>
+                                    i !== si
+                                      ? x
+                                      : {
+                                          ...x,
+                                          bands: x.bands.map((bb, j) =>
+                                            j === bi ? { ...bb, remark: v } : bb,
+                                          ),
+                                        },
+                                  ),
+                                );
+                              }}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {scale.bands.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No default bands — add your own nursery grades if you use them.
+                  </p>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setGradingScales((prev) =>
+                      prev.map((x, i) =>
+                        i !== si
+                          ? x
+                          : {
+                              ...x,
+                              bands: [
+                                ...x.bands,
+                                { grade: "", min: 0, max: 100, points: null, remark: "" },
+                              ],
+                            },
+                      ),
+                    );
+                  }}
+                >
+                  Add band
+                </Button>
+              </div>
+            ))}
+          </div>
         )}
+
 
         {current.key === "fees" && (
           <p className="mt-4 text-sm text-muted-foreground">

@@ -2334,7 +2334,13 @@ export const saveWizardAcademics = createServerFn({ method: "POST" })
     (data: {
       schoolId: string;
       classes: { section: string; name: string; stream?: string; level_order?: number }[];
-      subjects: { name: string; code?: string; section?: string }[];
+      subjects: {
+        name: string;
+        code?: string;
+        section?: string;
+        /** class names matched after classes inserted, or empty = all in section */
+        classNames?: string[];
+      }[];
     }) => data,
   )
   .handler(async ({ context, data }) => {
@@ -2355,12 +2361,34 @@ export const saveWizardAcademics = createServerFn({ method: "POST" })
       );
     }
     for (const [i, s] of data.subjects.entries()) {
-      const id = nid(context.userId, `wiz-sub-${Date.now()}-${i}`);
+      const id = nid(uid, `sub-w-${i}-${Date.now()}`);
       await sql.query(
         `insert into subjects (id, user_id, school_id, name, code, section)
          values ($1,$2,$3,$4,$5,$6)`,
         [id, uid, data.schoolId, s.name, s.code || null, s.section || null],
       );
+      const names = (s.classNames || []).map((n) => n.trim()).filter(Boolean);
+      if (names.length) {
+        for (const cn of names) {
+          const cls = await sql<{ id: string }>`
+            select id from classes
+            where school_id = ${data.schoolId} and name = ${cn}
+              and (${s.section || null}::text is null or section = ${s.section || ""})
+            limit 1
+          `;
+          if (cls[0]) {
+            try {
+              await sql.query(
+                `insert into subject_classes (subject_id, class_id) values ($1,$2)
+                 on conflict do nothing`,
+                [id, cls[0].id],
+              );
+            } catch {
+              /* table may not exist yet */
+            }
+          }
+        }
+      }
     }
     await sql.query(
       `insert into school_setup_progress (school_id, academics_done, updated_at)
@@ -6519,6 +6547,7 @@ export const createSchoolSubject = createServerFn({ method: "POST" })
       name: string;
       code?: string;
       section?: string;
+      classIds?: string[];
     }) => data,
   )
   .handler(async ({ context, data }) => {
@@ -6543,6 +6572,17 @@ export const createSchoolSubject = createServerFn({ method: "POST" })
         data.section?.trim() || null,
       ],
     );
+    for (const classId of data.classIds || []) {
+      try {
+        await sql.query(
+          `insert into subject_classes (subject_id, class_id) values ($1,$2)
+           on conflict do nothing`,
+          [id, classId],
+        );
+      } catch {
+        /* ignore */
+      }
+    }
     return { ok: true, id };
   });
 
@@ -6987,4 +7027,104 @@ export const checkStudentResultAccess = createServerFn({ method: "POST" })
       data.classId,
       data.termId,
     );
+  });
+
+
+export { MANEB_POINTS_BANDS, PRIMARY_LETTER_BANDS } from "./grading-templates";
+
+export const saveWizardGrading = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      scales: {
+        name: string;
+        section?: string;
+        system: "letter" | "points_1_9" | "custom";
+        appliesTo?: string;
+        continuousWeight?: number;
+        examWeight?: number;
+        isDefault?: boolean;
+        bands: {
+          grade: string;
+          min: number;
+          max: number;
+          points?: number | null;
+          remark?: string;
+        }[];
+      }[];
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    // Replace existing scales for a clean wizard save
+    const old = await sql<{ id: string }>`
+      select id from grading_scales where school_id = ${data.schoolId}
+    `;
+    for (const o of old) {
+      await sql.query(`delete from grading_bands where scale_id = $1`, [o.id]);
+      await sql.query(`delete from grading_scales where id = $1`, [o.id]);
+    }
+    let firstId: string | null = null;
+    for (const [si, scale] of data.scales.entries()) {
+      if (!scale.bands) continue;
+      const scaleId = nid(context.userId, `gs-${si}-${Date.now()}`);
+      if (!firstId) firstId = scaleId;
+      await sql.query(
+        `insert into grading_scales (
+           id, school_id, name, is_default, continuous_weight, exam_weight,
+           section, system, applies_to
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          scaleId,
+          data.schoolId,
+          scale.name,
+          scale.isDefault ?? si === 0,
+          scale.continuousWeight ?? 40,
+          scale.examWeight ?? 60,
+          scale.section || null,
+          scale.system,
+          scale.appliesTo || null,
+        ],
+      );
+      for (const [bi, b] of scale.bands.entries()) {
+        await sql.query(
+          `insert into grading_bands (id, scale_id, grade, min_score, max_score, points, remark, sort_order)
+           values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            nid(context.userId, `gb-${si}-${bi}`),
+            scaleId,
+            b.grade,
+            b.min,
+            b.max,
+            b.points ?? null,
+            b.remark || null,
+            bi,
+          ],
+        );
+      }
+    }
+    await sql.query(
+      `insert into ranking_settings (school_id, enabled, show_to_parents)
+       values ($1,true,true) on conflict (school_id) do nothing`,
+      [data.schoolId],
+    );
+    return { ok: true, scales: data.scales.length };
+  });
+
+export const setSubjectClasses = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string; subjectId: string; classIds: string[] }) => data)
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    await sql.query(`delete from subject_classes where subject_id = $1`, [data.subjectId]);
+    for (const classId of data.classIds) {
+      await sql.query(
+        `insert into subject_classes (subject_id, class_id) values ($1,$2) on conflict do nothing`,
+        [data.subjectId, classId],
+      );
+    }
+    return { ok: true };
   });
