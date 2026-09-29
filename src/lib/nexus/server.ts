@@ -401,10 +401,29 @@ export const advanceSubmission = createServerFn({ method: "POST" })
 
 export const publishResults = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((data: { classId: string; termId: string; actor?: string }) => data)
+  .validator(
+    (data: {
+      classId: string;
+      termId: string;
+      actor?: string;
+      /** ALL = every parent; FEE_CRITERIA = selected fee types must be cleared */
+      accessMode?: "ALL" | "FEE_CRITERIA";
+      /** fee_structures.id values that must have zero balance for the student */
+      requiredFeeStructureIds?: string[];
+    }) => data,
+  )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const now = new Date().toISOString();
+    const accessMode = data.accessMode === "FEE_CRITERIA" ? "FEE_CRITERIA" : "ALL";
+    const requiredFeeIds = Array.isArray(data.requiredFeeStructureIds)
+      ? data.requiredFeeStructureIds.filter(Boolean)
+      : [];
+    if (accessMode === "FEE_CRITERIA" && requiredFeeIds.length === 0) {
+      throw new Error(
+        "Select at least one fee type that must be paid, or choose access for all parents.",
+      );
+    }
     const subs = await sql<ResultSubmission>`
       select * from result_submissions
       where user_id = ${context.userId} and class_id = ${data.classId} and term_id = ${data.termId}
@@ -495,7 +514,36 @@ export const publishResults = createServerFn({ method: "POST" })
       console.error("[notify] publish results", e);
     }
 
-    return { ok: true, students: students.length };
+    
+    // Persist who may view these results
+    try {
+      const policyId = nid(context.userId, `rap-${data.classId}-${data.termId}`);
+      await sql.query(
+        `insert into result_access_policies (
+           id, school_id, class_id, term_id, access_mode, required_fee_structure_ids,
+           published_by, published_at
+         ) values ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::timestamptz)
+         on conflict (school_id, class_id, term_id) do update set
+           access_mode = excluded.access_mode,
+           required_fee_structure_ids = excluded.required_fee_structure_ids,
+           published_by = excluded.published_by,
+           published_at = excluded.published_at`,
+        [
+          policyId,
+          schoolId,
+          data.classId,
+          data.termId,
+          accessMode,
+          JSON.stringify(requiredFeeIds),
+          data.actor ?? context.userId,
+          now,
+        ],
+      );
+    } catch (e) {
+      console.error("[publish] access policy", e);
+    }
+
+return { ok: true, students: students.length };
   });
 
 export const recordPayment = createServerFn({ method: "POST" })
@@ -6861,4 +6909,76 @@ export const updatePlatformSettings = createServerFn({ method: "POST" })
       );
     }
     return { ok: true };
+  });
+
+
+/** Whether a student may view published results for class+term under access policy. */
+export async function studentMeetsResultAccess(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  schoolId: string,
+  studentId: string,
+  classId: string,
+  termId: string,
+): Promise<{ allowed: boolean; reason?: string; accessMode: string }> {
+  const policies = await sql<{
+    access_mode: string;
+    required_fee_structure_ids: unknown;
+  }>`
+    select access_mode, required_fee_structure_ids from result_access_policies
+    where school_id = ${schoolId} and class_id = ${classId} and term_id = ${termId}
+    limit 1
+  `;
+  if (!policies[0] || policies[0].access_mode === "ALL") {
+    return { allowed: true, accessMode: policies[0]?.access_mode || "ALL" };
+  }
+  let feeIds: string[] = [];
+  const raw = policies[0].required_fee_structure_ids;
+  if (Array.isArray(raw)) feeIds = raw.map(String);
+  else if (typeof raw === "string") {
+    try {
+      feeIds = JSON.parse(raw);
+    } catch {
+      feeIds = [];
+    }
+  }
+  if (!feeIds.length) return { allowed: true, accessMode: "FEE_CRITERIA" };
+
+  for (const feeId of feeIds) {
+    const rows = await sql<{ balance: string }>`
+      select coalesce(sum(amount - paid), 0)::text as balance
+      from student_charges
+      where school_id = ${schoolId}
+        and student_id = ${studentId}
+        and fee_structure_id = ${feeId}
+        and status not in ('WAIVED','CANCELLED')
+    `;
+    const bal = Number(rows[0]?.balance ?? 0);
+    if (bal > 0.5) {
+      const fee = await sql<{ name: string }>`
+        select name from fee_structures where id = ${feeId} limit 1
+      `;
+      return {
+        allowed: false,
+        accessMode: "FEE_CRITERIA",
+        reason: `Outstanding balance on ${fee[0]?.name || "required fees"}. Clear fees to view results.`,
+      };
+    }
+  }
+  return { allowed: true, accessMode: "FEE_CRITERIA" };
+}
+
+export const checkStudentResultAccess = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: { schoolId: string; studentId: string; classId: string; termId: string }) => data,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    return studentMeetsResultAccess(
+      sql,
+      data.schoolId,
+      data.studentId,
+      data.classId,
+      data.termId,
+    );
   });

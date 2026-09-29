@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { StatusPill } from "@/components/status-pill";
@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
-import { advanceSubmission, publishResults, saveMarks } from "@/lib/nexus/server";
+import { advanceSubmission, checkStudentResultAccess, publishResults, saveMarks } from "@/lib/nexus/server";
 import {
   classById,
   classLabel,
@@ -45,21 +45,58 @@ function ParentResults({ snap }: { snap: Snapshot }) {
   const parent = defaultParent(snap);
   const children = parent ? parentChildren(snap, parent.id) : [];
   const term = publishedTerm(snap);
+  const [locks, setLocks] = useState<Record<string, { allowed: boolean; reason?: string }>>({});
+
+  useEffect(() => {
+    if (!term || !children.length) return;
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, { allowed: boolean; reason?: string }> = {};
+      for (const c of children) {
+        if (!c.class_id) {
+          next[c.id] = { allowed: true };
+          continue;
+        }
+        try {
+          const r = await checkStudentResultAccess({
+            data: {
+              schoolId: snap.school.id,
+              studentId: c.id,
+              classId: c.class_id,
+              termId: term.id,
+            },
+          });
+          next[c.id] = { allowed: r.allowed, reason: r.reason };
+        } catch {
+          next[c.id] = { allowed: true };
+        }
+      }
+      if (!cancelled) setLocks(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [term?.id, children.map((c) => c.id).join(","), snap.school.id]);
+
   return (
     <div>
       <h1 className="font-display text-3xl text-foam">Published results</h1>
       <p className="mt-1 text-sm text-mist">
-        Only packets the school has confirmed appear here. Term 2 is still inside the office.
+        Only packets the school has published appear here. Access may depend on fee clearance set by the school.
       </p>
       <div className="mt-6 space-y-5">
         {children.map((c) => {
-          const rows = term
-            ? snap.results.filter(
-                (r) => r.student_id === c.id && r.term_id === term.id && r.status === "PUBLISHED",
-              )
-            : [];
-          const avg = term ? studentAverage(snap, c.id, term.id, true) : null;
-          const pos = term ? studentPosition(snap, c.id, term.id) : null;
+          const lock = locks[c.id];
+          const blocked = lock && lock.allowed === false;
+          const rows =
+            term && !blocked
+              ? snap.results.filter(
+                  (r) =>
+                    r.student_id === c.id && r.term_id === term.id && r.status === "PUBLISHED",
+                )
+              : [];
+          const avg = term && !blocked ? studentAverage(snap, c.id, term.id, true) : null;
+          const pos = term && !blocked ? studentPosition(snap, c.id, term.id) : null;
           const peers = snap.students.filter((s) => s.class_id === c.class_id).length;
           return (
             <section key={c.id} className="rounded-xl border border-foam/10 bg-ink-2 p-4">
@@ -79,7 +116,14 @@ function ParentResults({ snap }: { snap: Snapshot }) {
                     </span>
                   </li>
                 ))}
-                {rows.length === 0 ? <li className="py-2 text-sm text-mist">Nothing published for this child.</li> : null}
+                {blocked ? (
+                  <li className="py-2 text-sm text-amber-200/90">
+                    {lock?.reason ||
+                      "Results are published but locked until required school fees are cleared."}
+                  </li>
+                ) : rows.length === 0 ? (
+                  <li className="py-2 text-sm text-mist">Nothing published for this child.</li>
+                ) : null}
               </ul>
             </section>
           );
@@ -97,6 +141,9 @@ function StaffResults({ snap, persona }: { snap: Snapshot; persona: string }) {
   const packets = snap.submissions.filter((s) => s.class_id === f2a?.id && s.term_id === term?.id);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [accessMode, setAccessMode] = useState<"ALL" | "FEE_CRITERIA">("ALL");
+  const [selectedFeeIds, setSelectedFeeIds] = useState<string[]>([]);
+
 
   const allReady = packets.every((p) => p.status === "APPROVED" || p.status === "READY_TO_PUBLISH" || p.status === "PUBLISHED");
   const already = packets.every((p) => p.status === "PUBLISHED");
@@ -145,16 +192,97 @@ function StaffResults({ snap, persona }: { snap: Snapshot; persona: string }) {
       ) : null}
 
       <Dialog open={confirm} onOpenChange={setConfirm}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Publish results</DialogTitle>
             <DialogDescription>
-              Academic year 2026 · {term?.name} · {classLabel(f2a)} · {snap.students.filter((s) => s.class_id === f2a?.id).length} students.
+              {term?.name} · {classLabel(f2a)} ·{" "}
+              {snap.students.filter((s) => s.class_id === f2a?.id).length} students.
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Published results will become visible to authorised parents. The publisher, time and class are written to the audit log.
-          </p>
+          <div className="space-y-4 text-sm">
+            <p className="text-muted-foreground">
+              Choose who can see these results in the parent app. You can require clearance on
+              specific fee types from your fee structure (e.g. school fees only, or school + exam fees).
+            </p>
+            <div className="space-y-2">
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="accessMode"
+                  checked={accessMode === "ALL"}
+                  onChange={() => setAccessMode("ALL")}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">All linked parents</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Everyone with a linked child in this class can view results.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="accessMode"
+                  checked={accessMode === "FEE_CRITERIA"}
+                  onChange={() => setAccessMode("FEE_CRITERIA")}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">Only if selected fees are cleared</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Parent sees results only when the student has no outstanding balance on each
+                    fee type you tick below.
+                  </span>
+                </span>
+              </label>
+            </div>
+            {accessMode === "FEE_CRITERIA" && (
+              <div className="rounded-lg border border-border p-3">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Fee criteria (tick the ones that must be paid)
+                </p>
+                {snap.fees.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No fee structures yet. Add them under Finance first.
+                  </p>
+                ) : (
+                  <ul className="max-h-48 space-y-2 overflow-y-auto">
+                    {snap.fees.map((f) => (
+                      <li key={f.id}>
+                        <label className="flex cursor-pointer items-start gap-2">
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={selectedFeeIds.includes(f.id)}
+                            onChange={() => {
+                              setSelectedFeeIds((prev) =>
+                                prev.includes(f.id)
+                                  ? prev.filter((id) => id !== f.id)
+                                  : [...prev, f.id],
+                              );
+                            }}
+                          />
+                          <span>
+                            <span className="font-medium">{f.name}</span>
+                            <span className="block text-xs text-muted-foreground tabular-nums">
+                              {Number(f.amount).toLocaleString()} {snap.school.currency || "MWK"}
+                              {f.mandatory ? " · mandatory" : ""}
+                            </span>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Example: tick only “School fees” so exam fee arrears do not block results. Or tick
+                  both. Inactive (unticked) fee types are ignored for this publish.
+                </p>
+              </div>
+            )}
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirm(false)}>
               Cancel
@@ -166,7 +294,14 @@ function StaffResults({ snap, persona }: { snap: Snapshot; persona: string }) {
                 setBusy(true);
                 try {
                   const res = await publishResults({
-                    data: { classId: f2a.id, termId: term.id, actor: "Mrs. Grace Mvula" },
+                    data: {
+                      classId: f2a.id,
+                      termId: term.id,
+                      actor: "Results office",
+                      accessMode,
+                      requiredFeeStructureIds:
+                        accessMode === "FEE_CRITERIA" ? selectedFeeIds : [],
+                    },
                   });
                   toast.success(`Published for ${res.students} students`);
                   setConfirm(false);
