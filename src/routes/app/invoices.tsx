@@ -13,7 +13,7 @@ import {
   sendPlatformInvoice,
   initiatePlatformInvoicePayment,
 } from "@/lib/nexus/server";
-import { SUBSCRIPTION_PRICES, formatMwk } from "@/lib/nexus/billing";
+import { BILLING_TIER_OPTIONS, SUBSCRIPTION_PRICES, formatMwk } from "@/lib/nexus/billing";
 import { money } from "@/lib/utils";
 
 export const Route = createFileRoute("/app/invoices")({ component: InvoicesPage });
@@ -146,18 +146,12 @@ function InvoicesPage() {
               </tr>
             </thead>
             <tbody>
-              {(
-                [
-                  ["Primary", "primary"],
-                  ["Secondary", "secondary"],
-                  ["Both (Primary & Secondary)", "both"],
-                ] as const
-              ).map(([label, key]) => (
-                <tr key={key} className="border-t border-border">
-                  <td className="py-2">{label}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[key].monthly)}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[key].term)}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[key].annual)}</td>
+              {BILLING_TIER_OPTIONS.map((o) => (
+                <tr key={o.value} className="border-t border-border">
+                  <td className="py-2">{o.label}</td>
+                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].monthly)}</td>
+                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].term)}</td>
+                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].annual)}</td>
                 </tr>
               ))}
             </tbody>

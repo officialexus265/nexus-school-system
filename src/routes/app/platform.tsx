@@ -16,6 +16,17 @@ import {
   bootstrapPlatformOwner,
   resendSchoolInvite,
 } from "@/lib/nexus/server";
+import {
+  BILLING_TIER_OPTIONS,
+  SUBSCRIPTION_PRICES,
+  type BillingPeriod,
+  type BillingTier,
+  formatMwk,
+  priceFor,
+  schoolTypeFromTier,
+  tierLabel,
+} from "@/lib/nexus/billing";
+
 import { money } from "@/lib/utils";
 
 export const Route = createFileRoute("/app/platform")({ component: PlatformPage });
@@ -28,7 +39,11 @@ function PlatformPage() {
   const [ownerName, setOwnerName] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [city, setCity] = useState("");
-  const [activationFee, setActivationFee] = useState("150000");
+  const [billingTier, setBillingTier] = useState<BillingTier>("all");
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
+  const [activationFee, setActivationFee] = useState(
+    String(priceFor("all", "monthly")),
+  );
   const [busy, setBusy] = useState(false);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
 
@@ -51,8 +66,11 @@ function PlatformPage() {
           ownerName,
           ownerEmail,
           city: city || undefined,
-          activationFee: Number(activationFee) || 150000,
+          activationFee: Number(activationFee) || priceFor(billingTier, billingPeriod),
           plan: "Standard",
+          billingTier,
+          billingPeriod,
+          schoolType: schoolTypeFromTier(billingTier),
         },
       });
       toast.success(`School “${result.schoolName}” created. Invite ready.`);
@@ -187,19 +205,95 @@ function PlatformPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="fee">Activation fee (MWK)</Label>
+              <Label>School package (sections)</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={billingTier}
+                onChange={(e) => {
+                  const tier = e.target.value as BillingTier;
+                  setBillingTier(tier);
+                  setActivationFee(String(priceFor(tier, billingPeriod)));
+                }}
+              >
+                {BILLING_TIER_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label} — {formatMwk(SUBSCRIPTION_PRICES[o.value].monthly)} / month
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Payment period</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={billingPeriod}
+                onChange={(e) => {
+                  const period = e.target.value as BillingPeriod;
+                  setBillingPeriod(period);
+                  setActivationFee(String(priceFor(billingTier, period)));
+                }}
+              >
+                <option value="monthly">
+                  Monthly — {formatMwk(priceFor(billingTier, "monthly"))}
+                </option>
+                <option value="term">
+                  Per term — {formatMwk(priceFor(billingTier, "term"))}
+                </option>
+                <option value="annual">
+                  Academic year — {formatMwk(priceFor(billingTier, "annual"))}
+                </option>
+              </select>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>All price options (select fills package + period + fee)</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={`${billingTier}:${billingPeriod}`}
+                onChange={(e) => {
+                  const [tier, period] = e.target.value.split(":") as [
+                    BillingTier,
+                    BillingPeriod,
+                  ];
+                  setBillingTier(tier);
+                  setBillingPeriod(period);
+                  setActivationFee(String(priceFor(tier, period)));
+                }}
+              >
+                {BILLING_TIER_OPTIONS.flatMap((o) =>
+                  (["monthly", "term", "annual"] as BillingPeriod[]).map((period) => (
+                    <option
+                      key={`${o.value}-${period}`}
+                      value={`${o.value}:${period}`}
+                    >
+                      {o.label} ·{" "}
+                      {period === "monthly"
+                        ? "Monthly"
+                        : period === "term"
+                          ? "Per term"
+                          : "Academic year"}{" "}
+                      — {formatMwk(priceFor(o.value, period))}
+                    </option>
+                  )),
+                )}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="fee">Activation / first period fee (MWK)</Label>
               <Input
                 id="fee"
                 type="number"
                 value={activationFee}
                 onChange={(e) => setActivationFee(e.target.value)}
-                min={0}
               />
+              <p className="text-xs text-muted-foreground">
+                Auto-filled from package; you can override if you agreed a custom fee.
+              </p>
             </div>
             <div className="flex items-end">
-              <Button type="submit" disabled={busy} className="w-full sm:w-auto">
+              <Button type="submit" disabled={busy}>
                 {busy ? "Creating…" : "Create & generate invite"}
               </Button>
+
             </div>
           </form>
 

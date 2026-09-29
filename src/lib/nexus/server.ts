@@ -8,12 +8,15 @@ import { platformSmsCredentials, sendSms, sendSmsWithCredentials } from "./sms";
 import {
   formatMwk,
   inferBillingTier,
+  normalizeBillingTier,
   periodBounds,
   priceFor,
+  schoolTypeFromTier,
   toDateStr,
   type BillingPeriod,
   type BillingTier,
 } from "./billing";
+// normalizeBillingTier used when reading school.billing_tier
 import { schoolInviteEmail, sendEmail } from "./email";
 import {
   accessibleSchoolIds,
@@ -796,6 +799,9 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
       city?: string;
       activationFee?: number;
       plan?: string;
+      billingTier?: import("./billing").BillingTier;
+      billingPeriod?: "monthly" | "term" | "annual";
+      schoolType?: string;
     }) => data,
   )
   .handler(async ({ context, data }) => {
@@ -806,6 +812,14 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
     if (!name || !ownerEmail || !ownerName) {
       throw new Error("School name, owner name and owner email are required");
     }
+    const billingTier = normalizeBillingTier(data.billingTier || "all");
+    const billingPeriod = data.billingPeriod || "monthly";
+    const feeFromPlan = priceFor(billingTier, billingPeriod);
+    const activationFee =
+      data.activationFee != null && !Number.isNaN(Number(data.activationFee))
+        ? Number(data.activationFee)
+        : feeFromPlan;
+    const schoolTypeLabel = data.schoolType || schoolTypeFromTier(billingTier);
 
     // Unique slug
     let base = slugify(name);
@@ -831,22 +845,24 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
         subscription_plan, activation_fee, logo_mark,
         primary_color, secondary_color, timezone, currency,
         owner_name, owner_email, invite_token, invite_expires_at,
-        created_by, parent_app_slug, parent_app_name
+        created_by, parent_app_slug, parent_app_name,
+        billing_tier, billing_period, school_type
       ) values (
         $1,$2,$3,$4,$5,'Malawi','PENDING_PAYMENT',
         $6,$7,$8,
         '#0f766e','#134e4a','Africa/Blantyre','MWK',
         $9,$10,$11,$12,
-        $13,$14,$15
+        $13,$14,$15,
+        $16,$17,$18
       )`,
       [
         schoolId,
-        context.userId, // temporary: still owned by platform user for isolation compat
+        context.userId,
         slug,
         name,
         data.city?.trim() || null,
         data.plan || "Standard",
-        data.activationFee ?? 150000,
+        activationFee,
         name.slice(0, 2).toUpperCase(),
         ownerName,
         ownerEmail,
@@ -855,6 +871,9 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
         context.userId,
         parentAppSlug,
         `${name} Parent`,
+        billingTier,
+        billingPeriod,
+        schoolTypeLabel,
       ],
     );
 
@@ -2593,9 +2612,19 @@ export const updateSchoolBillingPrefs = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-function invoiceNumber(schoolSlug: string, period: string, start: string): string {
+function invoiceNumber(
+  schoolSlug: string,
+  schoolId: string,
+  period: string,
+  start: string,
+): string {
+  // Must be unique per invoice: include school id suffix (slug alone can collide)
   const stamp = start.replace(/-/g, "").slice(0, 6);
-  return `NEX-${(schoolSlug || "SCH").toUpperCase().slice(0, 8)}-${period.slice(0, 3).toUpperCase()}-${stamp}`;
+  const slugPart = (schoolSlug || "SCH").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+  const idPart = (schoolId || "").replace(/[^a-zA-Z0-9]/g, "").slice(-6).toUpperCase();
+  const per = period.slice(0, 3).toUpperCase();
+  const uniq = `${Date.now().toString(36).toUpperCase().slice(-4)}`;
+  return `NEX-${slugPart}${idPart}-${per}-${stamp}-${uniq}`;
 }
 
 /** Generate invoices for all active schools for the current period (month-end job). */
@@ -2631,9 +2660,9 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
     }[] = [];
 
     for (const school of schools) {
-      const tier =
-        (school as { billing_tier?: string }).billing_tier as BillingTier ||
-        inferBillingTier(school.school_type);
+      const tier = normalizeBillingTier(
+        (school as { billing_tier?: string }).billing_tier || school.school_type,
+      );
       const period =
         ((school as { billing_period?: string }).billing_period as BillingPeriod) ||
         defaultPeriod;
@@ -2667,14 +2696,30 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
       }
 
       const invId = nid(context.userId, `pinv-${Date.now()}-${school.id.slice(-6)}`);
-      const num = invoiceNumber(school.slug, period, start);
-      await sql.query(
-        `insert into platform_invoices (
-           id, school_id, invoice_number, billing_tier, billing_period,
-           period_start, period_end, amount, currency, status, due_date
-         ) values ($1,$2,$3,$4,$5,$6::date,$7::date,$8,'MWK','DRAFT',$9::date)`,
-        [invId, school.id, num, tier, period, start, end, amount, due],
-      );
+      let num = invoiceNumber(school.slug, school.id, period, start);
+      try {
+        await sql.query(
+          `insert into platform_invoices (
+             id, school_id, invoice_number, billing_tier, billing_period,
+             period_start, period_end, amount, currency, status, due_date
+           ) values ($1,$2,$3,$4,$5,$6::date,$7::date,$8,'MWK','DRAFT',$9::date)`,
+          [invId, school.id, num, tier, period, start, end, amount, due],
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("invoice_number") || msg.includes("unique")) {
+          num = invoiceNumber(school.slug, school.id, period, start) + "-R";
+          await sql.query(
+            `insert into platform_invoices (
+               id, school_id, invoice_number, billing_tier, billing_period,
+               period_start, period_end, amount, currency, status, due_date
+             ) values ($1,$2,$3,$4,$5,$6::date,$7::date,$8,'MWK','DRAFT',$9::date)`,
+            [invId, school.id, num, tier, period, start, end, amount, due],
+          );
+        } else {
+          throw err;
+        }
+      }
       await sql.query(
         `insert into platform_invoice_events (id, invoice_id, action, detail, actor)
          values ($1,$2,'GENERATED',$3,$4)`,
