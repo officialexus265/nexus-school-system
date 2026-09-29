@@ -24,6 +24,7 @@ import {
   bulkImportParents,
   bulkImportStudents,
   deleteStudentRecord,
+  updateStudentRecord,
 } from "@/lib/nexus/server";
 import { classById, classLabel, studentAttendance, studentBalance } from "@/lib/nexus/selectors";
 import { money, pct, studentName } from "@/lib/utils";
@@ -40,15 +41,39 @@ function StudentsPage() {
   if (!q.data) return null;
   const snap = q.data;
   const students = snap.students;
+  const [query, setQuery] = useState("");
+  const filtered = students.filter((s) => {
+    const qstr = query.trim().toLowerCase();
+    if (!qstr) return true;
+    const blob = [
+      s.first_name,
+      s.last_name,
+      s.admission_number,
+      classLabel(classById(snap, s.class_id)),
+      s.status,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return blob.includes(qstr);
+  });
 
   return (
     <div className={dark ? "text-foam" : ""}>
       <PageHeader
         kicker="People"
         title="Students"
-        description="Manage the student roster. Delete removes the student record (use carefully)."
+        description="Search, open a profile, or edit student details. Click a name for full activity."
         actions={persona === "parent" ? null : (<><BulkImport schoolId={snap.school.id} onDone={() => void q.refetch()} /><EnrollDialog schoolId={snap.school.id} classes={snap.classes} /></>)}
       />
+      <div className="mb-3">
+        <Input
+          placeholder="Search name, admission, class…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="max-w-md"
+        />
+      </div>
       <div className="overflow-x-auto rounded-xl bg-card text-card-foreground shadow-[var(--shadow-border)]">
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="border-b border-border text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -63,7 +88,7 @@ function StudentsPage() {
             </tr>
           </thead>
           <tbody>
-            {students.map((s) => (
+            {filtered.map((s) => (
               <tr key={s.id} className="border-b border-border last:border-0">
                 <td className="px-4 py-3">
                   <Link to="/app/students/$studentId" params={{ studentId: s.id }} className="flex items-center gap-2 hover:underline">
@@ -79,6 +104,8 @@ function StudentsPage() {
                   <StatusPill value={s.status} />
                 </td>
                 <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                  <EditStudentButton student={s} schoolId={snap.school.id} classes={snap.classes} />
                   <Button
                     size="sm"
                     variant="outline"
@@ -98,9 +125,17 @@ function StudentsPage() {
                   >
                     Delete
                   </Button>
+                  </div>
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  No students match your search.
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -285,5 +320,125 @@ function BulkImport({ schoolId, onDone }: { schoolId: string; onDone?: () => voi
     >
       {busy ? "Importing…" : "Import CSV"}
     </Button>
+  );
+}
+
+
+function EditStudentButton({
+  student,
+  schoolId,
+  classes,
+}: {
+  student: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    admission_number: string;
+    class_id: string | null;
+    gender: string | null;
+    date_of_birth: string | null;
+    status: string;
+  };
+  schoolId: string;
+  classes: { id: string; name: string; stream: string | null }[];
+}) {
+  const invalidate = useInvalidateSnapshot();
+  const [open, setOpen] = useState(false);
+  const [firstName, setFirst] = useState(student.first_name);
+  const [lastName, setLast] = useState(student.last_name);
+  const [admission, setAdmission] = useState(student.admission_number);
+  const [classId, setClassId] = useState(student.class_id || "");
+  const [status, setStatus] = useState(student.status);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        Edit
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit student</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label>First name</Label>
+              <Input value={firstName} onChange={(e) => setFirst(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Last name</Label>
+              <Input value={lastName} onChange={(e) => setLast(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Admission no.</Label>
+              <Input value={admission} onChange={(e) => setAdmission(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Class</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={classId}
+                onChange={(e) => setClassId(e.target.value)}
+              >
+                <option value="">Unplaced</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.stream ? ` ${c.stream}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Status</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+              >
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="TRANSFERRED">TRANSFERRED</option>
+                <option value="GRADUATED">GRADUATED</option>
+                <option value="SUSPENDED">SUSPENDED</option>
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await updateStudentRecord({
+                    data: {
+                      schoolId,
+                      studentId: student.id,
+                      firstName,
+                      lastName,
+                      admissionNumber: admission,
+                      classId: classId || null,
+                      status,
+                    },
+                  });
+                  toast.success("Student updated");
+                  setOpen(false);
+                  void invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

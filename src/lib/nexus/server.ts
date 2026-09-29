@@ -7141,3 +7141,192 @@ export const setSubjectClasses = createServerFn({ method: "POST" })
     }
     return { ok: true };
   });
+
+
+export const updateStudentRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      studentId: string;
+      firstName?: string;
+      lastName?: string;
+      admissionNumber?: string;
+      classId?: string | null;
+      gender?: string;
+      dateOfBirth?: string | null;
+      status?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "students.manage");
+    const sql = await getSql();
+    const rows = await sql<{ id: string }>`
+      select id from students where id = ${data.studentId} and school_id = ${data.schoolId} limit 1
+    `;
+    if (!rows[0]) throw new Error("Student not found");
+    if (data.firstName !== undefined) {
+      await sql.query(`update students set first_name = $1 where id = $2`, [
+        data.firstName.trim(),
+        data.studentId,
+      ]);
+    }
+    if (data.lastName !== undefined) {
+      await sql.query(`update students set last_name = $1 where id = $2`, [
+        data.lastName.trim(),
+        data.studentId,
+      ]);
+    }
+    if (data.admissionNumber !== undefined) {
+      await sql.query(`update students set admission_number = $1 where id = $2`, [
+        data.admissionNumber.trim(),
+        data.studentId,
+      ]);
+    }
+    if (data.classId !== undefined) {
+      await sql.query(`update students set class_id = $1 where id = $2`, [
+        data.classId || null,
+        data.studentId,
+      ]);
+    }
+    if (data.gender !== undefined) {
+      await sql.query(`update students set gender = $1 where id = $2`, [
+        data.gender,
+        data.studentId,
+      ]);
+    }
+    if (data.dateOfBirth !== undefined) {
+      await sql.query(`update students set date_of_birth = $1 where id = $2`, [
+        data.dateOfBirth || null,
+        data.studentId,
+      ]);
+    }
+    if (data.status !== undefined) {
+      await sql.query(`update students set status = $1 where id = $2`, [
+        data.status,
+        data.studentId,
+      ]);
+    }
+    return { ok: true };
+  });
+
+export const getBehaviourSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    try {
+      const rows = await sql<Record<string, unknown>>`
+        select * from behaviour_settings where school_id = ${data.schoolId} limit 1
+      `;
+      if (rows[0]) return { settings: rows[0] };
+    } catch {
+      /* table missing */
+    }
+    return {
+      settings: {
+        school_id: data.schoolId,
+        enabled: false,
+        starting_points: 10,
+        weed_threshold: -50,
+        default_positive_points: 1,
+        default_negative_points: -1,
+        interventions: [
+          { id: "parent_meeting", label: "Invite parents for a meeting" },
+          { id: "monitor", label: "Parents must monitor behaviour closely" },
+          { id: "suspension", label: "Suspension" },
+          { id: "dismissal", label: "Dismissal / weeding" },
+        ],
+      },
+    };
+  });
+
+export const updateBehaviourSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      enabled?: boolean;
+      startingPoints?: number;
+      weedThreshold?: number;
+      defaultPositivePoints?: number;
+      defaultNegativePoints?: number;
+      interventions?: { id: string; label: string }[];
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const current = await getBehaviourSettings({ data: { schoolId: data.schoolId } });
+    const s = current.settings as Record<string, unknown>;
+    const enabled = data.enabled ?? Boolean(s.enabled);
+    const starting = data.startingPoints ?? Number(s.starting_points ?? 10);
+    const weed = data.weedThreshold ?? Number(s.weed_threshold ?? -50);
+    const pos = data.defaultPositivePoints ?? Number(s.default_positive_points ?? 1);
+    const neg = data.defaultNegativePoints ?? Number(s.default_negative_points ?? -1);
+    const interventions = data.interventions ?? s.interventions ?? [];
+    await sql.query(
+      `insert into behaviour_settings (
+         school_id, enabled, starting_points, weed_threshold,
+         default_positive_points, default_negative_points, interventions, updated_at
+       ) values ($1,$2,$3,$4,$5,$6,$7::jsonb,now())
+       on conflict (school_id) do update set
+         enabled = $2,
+         starting_points = $3,
+         weed_threshold = $4,
+         default_positive_points = $5,
+         default_negative_points = $6,
+         interventions = $7::jsonb,
+         updated_at = now()`,
+      [
+        data.schoolId,
+        enabled,
+        starting,
+        weed,
+        pos,
+        neg,
+        JSON.stringify(interventions),
+      ],
+    );
+    return { ok: true };
+  });
+
+/** Running behaviour score: starting_points + sum(record points). */
+export async function computeBehaviourScore(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  schoolId: string,
+  studentId: string,
+): Promise<{ score: number; enabled: boolean; weedThreshold: number; onWatchList: boolean }> {
+  let enabled = false;
+  let starting = 10;
+  let weed = -50;
+  try {
+    const st = await sql<{
+      enabled: boolean;
+      starting_points: number;
+      weed_threshold: number;
+    }>`select enabled, starting_points, weed_threshold from behaviour_settings where school_id = ${schoolId} limit 1`;
+    if (st[0]) {
+      enabled = Boolean(st[0].enabled);
+      starting = Number(st[0].starting_points);
+      weed = Number(st[0].weed_threshold);
+    }
+  } catch {
+    /* defaults */
+  }
+  if (!enabled) {
+    return { score: starting, enabled: false, weedThreshold: weed, onWatchList: false };
+  }
+  const sum = await sql<{ total: string }>`
+    select coalesce(sum(points), 0)::text as total
+    from behaviour_records where school_id = ${schoolId} and student_id = ${studentId}
+  `;
+  const score = starting + Number(sum[0]?.total ?? 0);
+  return {
+    score,
+    enabled: true,
+    weedThreshold: weed,
+    onWatchList: score <= weed,
+  };
+}

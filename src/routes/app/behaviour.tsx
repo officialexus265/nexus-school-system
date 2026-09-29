@@ -11,7 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInvalidateSnapshot, useSnapshot } from "@/hooks/use-snapshot";
-import { addBehaviour } from "@/lib/nexus/server";
+import {
+  addBehaviour,
+  getBehaviourSettings,
+  updateBehaviourSettings,
+} from "@/lib/nexus/server";
+import { useEffect } from "react";
+
 import { defaultParent, parentChildren } from "@/lib/nexus/selectors";
 import { formatDate, studentName } from "@/lib/utils";
 import { useNexusSession } from "@/stores/session";
@@ -64,6 +70,25 @@ function BehaviourPage() {
     );
   }
 
+  const [bhEnabled, setBhEnabled] = useState(false);
+  const [startPts, setStartPts] = useState(10);
+  const [weedPts, setWeedPts] = useState(-50);
+  const [posPts, setPosPts] = useState(1);
+  const [negPts, setNegPts] = useState(-1);
+
+  useEffect(() => {
+    void getBehaviourSettings({ data: { schoolId: snap.school.id } })
+      .then((r) => {
+        const s = r.settings;
+        setBhEnabled(Boolean(s.enabled));
+        setStartPts(Number(s.starting_points ?? 10));
+        setWeedPts(Number(s.weed_threshold ?? -50));
+        setPosPts(Number(s.default_positive_points ?? 1));
+        setNegPts(Number(s.default_negative_points ?? -1));
+      })
+      .catch(() => {});
+  }, [snap.school.id]);
+
   return (
     <div>
       {fromSetup ? (
@@ -80,6 +105,86 @@ function BehaviourPage() {
           </button>
         </div>
       ) : null}
+
+      <section className="mb-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
+        <h2 className="font-display text-xl">Behaviour points module</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Off by default. When on, every student starts with the points you set; positive/negative
+          records adjust the total. Reaching the low threshold can put them on an intervention list
+          (parent meeting, monitoring, dismissal — your policy).
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={bhEnabled}
+            onChange={(e) => setBhEnabled(e.target.checked)}
+          />
+          Enable behaviour points for this school
+        </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="space-y-1">
+            <Label>Starting points</Label>
+            <Input
+              type="number"
+              value={startPts}
+              onChange={(e) => setStartPts(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>Watch / weed threshold</Label>
+            <Input
+              type="number"
+              value={weedPts}
+              onChange={(e) => setWeedPts(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>Default + points</Label>
+            <Input
+              type="number"
+              value={posPts}
+              onChange={(e) => setPosPts(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>Default − points</Label>
+            <Input
+              type="number"
+              value={negPts}
+              onChange={(e) => setNegPts(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <Button
+          className="mt-3"
+          type="button"
+          onClick={async () => {
+            try {
+              await updateBehaviourSettings({
+                data: {
+                  schoolId: snap.school.id,
+                  enabled: bhEnabled,
+                  startingPoints: startPts,
+                  weedThreshold: weedPts,
+                  defaultPositivePoints: posPts,
+                  defaultNegativePoints: negPts,
+                  interventions: [
+                    { id: "parent_meeting", label: "Invite parents for a meeting" },
+                    { id: "monitor", label: "Parents must monitor behaviour closely" },
+                    { id: "suspension", label: "Suspension" },
+                    { id: "dismissal", label: "Dismissal / weeding" },
+                  ],
+                },
+              });
+              toast.success(bhEnabled ? "Behaviour points enabled" : "Behaviour points disabled");
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Failed");
+            }
+          }}
+        >
+          Save behaviour settings
+        </Button>
+      </section>
 
       <PageHeader
         kicker="Pastoral"
