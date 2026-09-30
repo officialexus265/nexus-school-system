@@ -123,8 +123,7 @@ function PlatformPage() {
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
 
   const [contactPhoneDisplay, setContactPhoneDisplay] = useState("0980697476");
-  const [googleOauthTestUsersUrl,
-                      platformAlertEmail, setGoogleOauthTestUsersUrl] = useState(
+  const [googleOauthTestUsersUrl, setGoogleOauthTestUsersUrl] = useState(
     "https://console.cloud.google.com/auth/audience?project=nsms-510209",
   );
   const [contactPhoneE164, setContactPhoneE164] = useState("+265980697476");
