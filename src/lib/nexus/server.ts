@@ -7781,3 +7781,161 @@ export const repairStaffSchoolLink = createServerFn({ method: "POST" })
       schoolName: sch[0]?.name || "",
     };
   });
+
+
+/**
+ * Staff invite: create account OR reset password (invite token is proof of ownership),
+ * then link membership. Avoids "invalid email or password" when email already exists
+ * with a different password.
+ */
+export const acceptStaffInviteWithPassword = createServerFn({ method: "POST" })
+  .validator(
+    (data: { token: string; password: string; name?: string }) => data,
+  )
+  .handler(async ({ data }) => {
+    const token = data.token?.trim();
+    const password = data.password || "";
+    if (!token) throw new Error("Token required");
+    if (password.length < 8) throw new Error("Password must be at least 8 characters");
+
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      school_id: string;
+      email: string;
+      full_name: string;
+      role_name: string | null;
+      role_id: string | null;
+      accepted_at: string | null;
+      expires_at: string;
+    }>`
+      select * from staff_invites where token = ${token} limit 1
+    `;
+    const inv = rows[0];
+    if (!inv) throw new Error("Staff invite not found or already used");
+    if (new Date(inv.expires_at).getTime() < Date.now()) {
+      throw new Error("This invite has expired. Ask the school to send a new one.");
+    }
+
+    const email = inv.email.trim().toLowerCase();
+    const fullName = (data.name || inv.full_name || email).trim();
+    const roleTitle = (inv.role_name || "teacher").toLowerCase();
+
+    // Prefer Better Auth crypto so sign-in verifies the same hash
+    let passwordHash: string;
+    try {
+      const { hashPassword } = await import("better-auth/crypto");
+      passwordHash = await hashPassword(password);
+    } catch {
+      try {
+        // Some builds export from better-auth/crypto/password
+        const mod = await import("better-auth/crypto/password");
+        const hp = (mod as { hashPassword: (p: string) => Promise<string> }).hashPassword;
+        passwordHash = await hp(password);
+      } catch {
+        throw new Error(
+          "Password hashing unavailable. Ensure better-auth is installed and redeploy.",
+        );
+      }
+    }
+
+    // Find or create user
+    let userRows = await sql<{ id: string }>`
+      select id from "user" where lower(email) = ${email} limit 1
+    `;
+    let userId = userRows[0]?.id;
+    if (!userId) {
+      userId = nid("invite", `usr-${Date.now()}`);
+      try {
+        await sql.query(
+          `insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+           values ($1, $2, $3, true, now(), now())`,
+          [userId, fullName, email],
+        );
+      } catch {
+        // email unique race
+        userRows = await sql<{ id: string }>`
+          select id from "user" where lower(email) = ${email} limit 1
+        `;
+        userId = userRows[0]?.id;
+        if (!userId) throw new Error("Could not create user account");
+      }
+    } else {
+      await sql.query(
+        `update "user" set name = coalesce(nullif($1, ''), name), "updatedAt" = now() where id = $2`,
+        [fullName, userId],
+      );
+    }
+
+    // Upsert credential account password (create or reset)
+    const accounts = await sql<{ id: string }>`
+      select id from account
+      where "userId" = ${userId} and "providerId" = 'credential'
+      limit 1
+    `.catch(() => [] as { id: string }[]);
+
+    if (accounts[0]) {
+      await sql.query(
+        `update account set password = $1, "updatedAt" = now() where id = $2`,
+        [passwordHash, accounts[0].id],
+      );
+    } else {
+      const accountId = nid(userId, `acc-${Date.now()}`);
+      await sql.query(
+        `insert into account (
+           id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt"
+         ) values ($1, $2, 'credential', $3, $4, now(), now())`,
+        [accountId, userId, userId, passwordHash],
+      );
+    }
+
+    // Membership
+    const mid = nid(userId, `mem-${inv.school_id}`);
+    try {
+      await sql.query(
+        `insert into user_school_memberships (id, user_id, school_id, role, status, role_id)
+         values ($1,$2,$3,$4,'ACTIVE',$5)
+         on conflict (user_id, school_id) do update set
+           role = excluded.role,
+           status = 'ACTIVE',
+           role_id = coalesce(excluded.role_id, user_school_memberships.role_id)`,
+        [mid, userId, inv.school_id, roleTitle, inv.role_id || null],
+      );
+    } catch {
+      await sql.query(
+        `insert into user_school_memberships (id, user_id, school_id, role, status)
+         values ($1,$2,$3,$4,'ACTIVE')
+         on conflict (user_id, school_id) do update set role = $4, status = 'ACTIVE'`,
+        [mid, userId, inv.school_id, roleTitle],
+      );
+    }
+
+    try {
+      await sql.query(
+        `update staff set user_id = $1, status = 'ACTIVE', role_title = coalesce(role_title, $2)
+         where school_id = $3 and lower(email) = $4`,
+        [userId, roleTitle, inv.school_id, email],
+      );
+    } catch {
+      /* optional */
+    }
+
+    await sql.query(
+      `update staff_invites set accepted_at = now() where id = $1`,
+      [inv.id],
+    );
+
+    const sch = await sql<{ slug: string; name: string }>`
+      select slug, name from schools where id = ${inv.school_id} limit 1
+    `;
+
+    return {
+      ok: true,
+      email,
+      schoolId: inv.school_id,
+      schoolSlug: sch[0]?.slug || "",
+      schoolName: sch[0]?.name || "",
+      roleName: roleTitle,
+      fullName,
+    };
+  });

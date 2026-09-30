@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  acceptStaffInviteWithPassword,
   completeSchoolOwnerSetup,
   completeStaffInvite,
   getInviteByToken,
@@ -109,26 +110,37 @@ function SetPasswordPage() {
     setPending(true);
     try {
       if (staff_token && invite?.ownerEmail) {
-        const { error: signUpError } = await authClient.signUp.email({
-          email: invite.ownerEmail,
+        // Server sets/resets password via invite token (works even if email already exists)
+        const done = await acceptStaffInviteWithPassword({
+          data: {
+            token: staff_token,
+            password,
+            name: invite.ownerName || undefined,
+          },
+        });
+        if (done.schoolSlug) setSchoolSlug(done.schoolSlug);
+
+        // Sign in with the password just set
+        const { error: signInError } = await authClient.signIn.email({
+          email: done.email || invite.ownerEmail,
           password,
-          name: invite.ownerName || invite.schoolName,
           callbackURL: "/app",
         });
-        if (signUpError) {
-          const { error: signInError } = await authClient.signIn.email({
-            email: invite.ownerEmail,
-            password,
-            callbackURL: "/app",
-          });
-          if (signInError) {
-            setError(signInError.message || "Could not create account");
-            setPending(false);
-            return;
+        if (signInError) {
+          // Account password is set — ask them to use login if cookie session fails
+          setError(
+            signInError.message ||
+              "Password saved. If sign-in failed, go to Login and use this email and the password you just set.",
+          );
+          setPending(false);
+          // Still try completeStaffInvite for session-based link if they somehow signed in
+          try {
+            await completeStaffInvite({ data: { token: staff_token } });
+          } catch {
+            /* already linked server-side */
           }
+          return;
         }
-        const done = await completeStaffInvite({ data: { token: staff_token } });
-        if (done.schoolSlug) setSchoolSlug(done.schoolSlug);
         setDone(true);
         setTimeout(() => {
           window.location.href = "/app";
@@ -264,7 +276,7 @@ function SetPasswordPage() {
                 required
                 minLength={8}
                 className="border-white/10 bg-ink text-foam"
-                placeholder="At least 8 characters"
+                placeholder="At least 8 characters (resets if email already exists)"
               />
             </div>
 
