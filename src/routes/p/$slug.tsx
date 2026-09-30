@@ -63,6 +63,8 @@ function ParentPortalPage() {
   >([]);
   const [linkChallengeId, setLinkChallengeId] = useState<string | null>(null);
   const [linkChannel, setLinkChannel] = useState<"sms" | "email">("sms");
+  const [deferredInstall, setDeferredInstall] = useState<Event | null>(null);
+  const [installHint, setInstallHint] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +124,16 @@ function ParentPortalPage() {
       cancelled = true;
     };
   }, [slug]);
+
+  useEffect(() => {
+    const onBip = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstall(e);
+      setInstallHint(true);
+    };
+    window.addEventListener("beforeinstallprompt", onBip);
+    return () => window.removeEventListener("beforeinstallprompt", onBip);
+  }, []);
 
   // Dynamic PWA manifest for this school
   useEffect(() => {
@@ -713,7 +725,7 @@ function ParentPortalPage() {
         background: `linear-gradient(165deg, ${primary} 0%, #0b1220 42%, #0b1220 100%)`,
       }}
     >
-      <header className="px-4 pb-4 pt-6">
+      <header className="px-4 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))]">
         <div className="mx-auto flex max-w-lg items-center gap-3">
           <span
             className="grid size-12 shrink-0 place-items-center rounded-2xl text-lg font-semibold"
@@ -757,11 +769,24 @@ function ParentPortalPage() {
         )}
       </header>
 
-      <main className="mx-auto max-w-lg px-4 pb-28">
+      <main className="mx-auto min-h-[60dvh] max-w-lg px-4 pb-32">
         {students.length === 0 && (
-          <div className="rounded-2xl bg-white/10 p-4 text-sm text-white/80">
-            No children are linked to your account yet. Contact the school office to verify your
-            relationship.
+          <div className="space-y-3 rounded-2xl bg-white/10 p-5 text-sm text-white/85">
+            <p className="font-medium text-white">No children linked yet</p>
+            <p className="text-white/70">
+              Use phone/email + student number to link, or ask the school office if you are not
+              registered as a parent yet.
+            </p>
+            <button
+              type="button"
+              className="w-full rounded-xl bg-white/15 py-2.5 text-sm font-medium text-white"
+              onClick={() => {
+                setPhase("link");
+                setError(null);
+              }}
+            >
+              Link children now
+            </button>
           </div>
         )}
 
@@ -770,11 +795,19 @@ function ParentPortalPage() {
             <div className="rounded-2xl bg-white/10 p-4 backdrop-blur">
               <p className="text-xs uppercase tracking-wider text-white/60">Student</p>
               <p className="mt-1 text-xl font-semibold">{studentName(child)}</p>
-              <p className="text-sm text-white/70">
-                {className
-                  ? `${className.section} · ${className.name}${className.stream ? ` ${className.stream}` : ""}`
-                  : "—"}{" "}
-                · {child.admission_number}
+              <p className="mt-1 text-sm text-white/75">
+                {[
+                  className
+                    ? `${(className as { name?: string }).name || ""}${
+                        (className as { stream?: string | null }).stream
+                          ? " " + (className as { stream?: string | null }).stream
+                          : ""
+                      }`.trim()
+                    : null,
+                  child.admission_number,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "—"}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -825,9 +858,35 @@ function ParentPortalPage() {
                 <p className="mt-1 line-clamp-3 text-sm text-white/70">{announcements[0].body}</p>
               </div>
             )}
-            <p className="pt-2 text-center text-xs text-white/40">
-              Add to Home Screen for the full app experience.
-            </p>
+            <div className="space-y-2 pt-2 text-center">
+              {deferredInstall && (
+                <button
+                  type="button"
+                  className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900"
+                  onClick={async () => {
+                    const ev = deferredInstall as Event & {
+                      prompt: () => Promise<void>;
+                      userChoice: Promise<{ outcome: string }>;
+                    };
+                    try {
+                      await ev.prompt();
+                      await ev.userChoice;
+                    } catch {
+                      /* ignore */
+                    }
+                    setDeferredInstall(null);
+                  }}
+                >
+                  Install app on this phone
+                </button>
+              )}
+              {!deferredInstall && (
+                <p className="text-xs leading-relaxed text-white/45">
+                  For the full app: open the browser menu → <strong>Add to Home Screen</strong>{" "}
+                  / <strong>Install app</strong>. Works offline for recently viewed pages.
+                </p>
+              )}
+            </div>
           </div>
         )}
 

@@ -100,10 +100,10 @@ function FinancePage() {
   if (q.isPending) return <Skeleton className="h-80" />;
   if (!q.data) return null;
   if (persona === "parent") return <ParentFees snap={q.data} />;
-  return <StaffFinance snap={q.data} />;
+  return <StaffFinance snap={q.data} fromSetup={fromSetup} />;
 }
 
-function StaffFinance({ snap }: { snap: Snapshot }) {
+function StaffFinance({ snap, fromSetup = false }: { snap: Snapshot; fromSetup?: boolean }) {
   const invalidate = useInvalidateSnapshot();
   const [charge, setCharge] = useState<StudentCharge | null>(null);
   const [reminderBusy, setReminderBusy] = useState(false);

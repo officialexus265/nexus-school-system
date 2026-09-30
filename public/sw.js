@@ -1,5 +1,5 @@
 /* NEXUS SW v3 — cache app shell + hashed assets so offline refresh works */
-const CACHE = "nexus-shell-v3";
+const CACHE = "nexus-pwa-v4"; // was: "nexus-shell-v3";
 const SHELL = ["/", "/login", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -104,7 +104,11 @@ self.addEventListener("fetch", (event) => {
           const cache = await caches.open(CACHE);
           cache.put(req, res.clone());
           // Also try to remember as fallback document
-          if (url.pathname === "/" || url.pathname === "/login") {
+          if (
+            url.pathname === "/" ||
+            url.pathname === "/login" ||
+            url.pathname.startsWith("/p/")
+          ) {
             cache.put(url.pathname, res.clone());
           }
           return res;

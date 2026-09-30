@@ -4091,8 +4091,10 @@ export const getParentAppManifest = createServerFn({ method: "GET" })
       short_name: (school.logo_mark || school.name.slice(0, 12)).slice(0, 12),
       description: `Parent portal for ${school.name}`,
       start_url: `/p/${school.parent_app_slug}`,
-      scope: `/p/${school.parent_app_slug}`,
+      scope: `/p/`,
       display: "standalone",
+      orientation: "portrait-primary",
+      categories: ["education"],
       background_color: "#0b1220",
       theme_color: color,
       icons: [
