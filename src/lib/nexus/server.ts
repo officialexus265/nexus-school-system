@@ -216,7 +216,7 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     sql<AuditLog>`
       select * from audit_logs
       where school_id = ${sid} or (school_id is null and user_id = ${userId})
-      order by created_at desc limit 40
+      order by created_at desc limit 200
     `,
     sql<CalendarEvent>`select * from calendar_events where school_id = ${sid} order by event_date`,
   ]);
@@ -3438,7 +3438,7 @@ export const listExaminations = createServerFn({ method: "POST" })
     }>`
       select id, name, term_id, start_date, end_date, status
       from examinations where school_id = ${data.schoolId}
-      order by created_at desc limit 40
+      order by created_at desc limit 200
     `;
     return { exams };
   });

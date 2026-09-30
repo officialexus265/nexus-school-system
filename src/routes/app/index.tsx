@@ -158,7 +158,7 @@ function OwnerHome({ snap }: { snap: NonNullable<ReturnType<typeof useSnapshot>[
         />
         <StatCard label="Result packets" value={String(pending.length)} hint="Awaiting review or publish" />
       </div>
-      <div className="mt-6 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+      <div className="mt-6 grid gap-4">
         <div className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
           <h2 className="font-display text-xl font-medium">Result pipeline</h2>
           <p className="text-sm text-muted-foreground">Form 2A · {term?.name}</p>
@@ -182,22 +182,14 @@ function OwnerHome({ snap }: { snap: NonNullable<ReturnType<typeof useSnapshot>[
                 );
               })}
           </ul>
-          <Link to="/app/results" className="mt-3 inline-block text-sm text-primary hover:underline">
-            Open exam office
-          </Link>
-        </div>
-        <div className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-          <h2 className="font-display text-xl font-medium">Ledger</h2>
-          <ul className="mt-4 space-y-3">
-            {snap.audit.slice(0, 5).map((a) => (
-              <li key={a.id} className="border-b border-border pb-3 last:border-0">
-                <p className="text-sm font-medium">{a.action.replaceAll("_", " ")}</p>
-                <p className="text-xs text-muted-foreground">
-                  {a.actor} · {a.detail}
-                </p>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-3 flex flex-wrap gap-4">
+            <Link to="/app/results" className="text-sm text-primary hover:underline">
+              Open exam office
+            </Link>
+            <Link to="/app/ledger" className="text-sm text-primary hover:underline">
+              Open activity ledger
+            </Link>
+          </div>
         </div>
       </div>
     </div>

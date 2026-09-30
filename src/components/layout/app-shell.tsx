@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Megaphone,
   Menu,
+  ScrollText,
   Settings,
   Shield,
   Users,
@@ -48,6 +49,7 @@ const SCHOOL_NAV: NavItem[] = [
   { to: "/app/results", label: "Results", icon: ClipboardCheck },
   { to: "/app/behaviour", label: "Behaviour", icon: Shield },
   { to: "/app/finance", label: "Finance", icon: Wallet },
+  { to: "/app/ledger", label: "Ledger", icon: ScrollText },
   { to: "/app/announcements", label: "Notices", icon: Megaphone },
   { to: "/app/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/app/documents", label: "Documents", icon: BookOpen },
@@ -76,6 +78,7 @@ const BURSAR_NAV: NavItem[] = [
   { to: "/app", label: "Overview", icon: LayoutDashboard },
   { to: "/app/students", label: "Students", icon: GraduationCap },
   { to: "/app/finance", label: "Finance", icon: Wallet },
+  { to: "/app/ledger", label: "Ledger", icon: ScrollText },
   { to: "/app/announcements", label: "Notices", icon: Megaphone },
 ];
 
