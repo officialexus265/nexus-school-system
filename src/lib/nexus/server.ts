@@ -7954,3 +7954,351 @@ export const acceptStaffInviteWithPassword = createServerFn({ method: "POST" })
       fullName,
     };
   });
+
+
+/** Public: lookup registered parent by phone or email for a school parent-app slug. */
+export const lookupParentContact = createServerFn({ method: "POST" })
+  .validator(
+    (data: { slug: string; phone?: string; email?: string }) => data,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const slug = data.slug.trim();
+    const schools = await sql<School>`
+      select * from schools where parent_app_slug = ${slug} or slug = ${slug} limit 1
+    `;
+    const school = schools[0];
+    if (!school) throw new Error("School app not found");
+
+    const phone = (data.phone || "").trim();
+    const email = (data.email || "").trim().toLowerCase();
+    if (!phone && !email) {
+      return { found: false as const };
+    }
+
+    let parents: Parent[] = [];
+    if (phone) {
+      const last9 = phone.replace(/\D/g, "").slice(-9);
+      if (last9.length >= 7) {
+        parents = await sql<Parent>`
+          select * from parents
+          where school_id = ${school.id}
+            and replace(replace(coalesce(phone,''), ' ', ''), '-', '') like ${"%" + last9}
+          limit 3
+        `;
+      }
+    }
+    if (!parents[0] && email) {
+      parents = await sql<Parent>`
+        select * from parents
+        where school_id = ${school.id} and lower(coalesce(email,'')) = ${email}
+        limit 3
+      `;
+    }
+    const p = parents[0];
+    if (!p) return { found: false as const, schoolName: school.name };
+
+    // Mask phone for display
+    const ph = (p.phone || "").replace(/\D/g, "");
+    const masked =
+      ph.length >= 4 ? `${"*".repeat(Math.max(0, ph.length - 4))}${ph.slice(-4)}` : "****";
+    return {
+      found: true as const,
+      schoolName: school.name,
+      parentId: p.id,
+      fullName: p.full_name || "Parent",
+      phoneMasked: masked,
+      hasEmail: Boolean(p.email),
+      hasPhone: Boolean(p.phone),
+    };
+  });
+
+/** Public: lookup student by admission number as parent types. */
+export const lookupStudentAdmission = createServerFn({ method: "POST" })
+  .validator((data: { slug: string; admissionNumber: string }) => data)
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const adm = data.admissionNumber.trim();
+    if (adm.length < 2) return { found: false as const };
+
+    const schools = await sql<School>`
+      select * from schools
+      where parent_app_slug = ${data.slug.trim()} or slug = ${data.slug.trim()}
+      limit 1
+    `;
+    const school = schools[0];
+    if (!school) throw new Error("School app not found");
+
+    const st = await sql<Student>`
+      select * from students
+      where school_id = ${school.id}
+        and lower(admission_number) = ${adm.toLowerCase()}
+      limit 1
+    `;
+    // partial match if exact fails and length >= 3
+    let student = st[0];
+    if (!student && adm.length >= 3) {
+      const partial = await sql<Student>`
+        select * from students
+        where school_id = ${school.id}
+          and lower(admission_number) like ${adm.toLowerCase() + "%"}
+        order by admission_number
+        limit 5
+      `;
+      if (partial.length === 1) student = partial[0];
+      else if (partial.length > 1) {
+        return {
+          found: false as const,
+          multiple: partial.map((s) => ({
+            id: s.id,
+            name: `${s.first_name} ${s.last_name}`.trim(),
+            admissionNumber: s.admission_number,
+          })),
+        };
+      }
+    }
+    if (!student) return { found: false as const };
+
+    const cls = await sql<{ name: string; stream: string | null }>`
+      select name, stream from classes where id = ${student.class_id} limit 1
+    `.catch(() => [] as { name: string; stream: string | null }[]);
+
+    return {
+      found: true as const,
+      student: {
+        id: student.id,
+        name: `${student.first_name} ${student.last_name}`.trim(),
+        admissionNumber: student.admission_number,
+        classLabel: cls[0]
+          ? `${cls[0].name}${cls[0].stream ? " " + cls[0].stream : ""}`
+          : "—",
+      },
+    };
+  });
+
+/**
+ * Parent self-link: parent must already be registered; students by admission numbers.
+ * Sends OTP; on verifyParentLinkOtp the links are created — no school approval.
+ */
+export const requestParentSelfLinkOtp = createServerFn({ method: "POST" })
+  .validator(
+    (data: {
+      slug: string;
+      phone?: string;
+      email?: string;
+      studentIds: string[];
+      channel?: "sms" | "email";
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    try {
+      await sql.query(
+        `alter table parent_otp_challenges add column if not exists pending_student_ids text`,
+      );
+      await sql.query(
+        `alter table parent_otp_challenges add column if not exists parent_id text`,
+      );
+      await sql.query(
+        `alter table parent_otp_challenges add column if not exists purpose text`,
+      );
+    } catch {
+      /* ignore */
+    }
+
+    const slug = data.slug.trim();
+    const schools = await sql<School>`
+      select * from schools where parent_app_slug = ${slug} or slug = ${slug} limit 1
+    `;
+    const school = schools[0];
+    if (!school) throw new Error("School app not found");
+
+    const studentIds = [...new Set((data.studentIds || []).filter(Boolean))];
+    if (!studentIds.length) throw new Error("Select at least one student");
+
+    const phone = (data.phone || "").trim();
+    const email = (data.email || "").trim().toLowerCase();
+    if (!phone && !email) throw new Error("Enter the phone or email the school registered for you");
+
+    let parents: Parent[] = [];
+    if (phone) {
+      const last9 = phone.replace(/\D/g, "").slice(-9);
+      parents = await sql<Parent>`
+        select * from parents
+        where school_id = ${school.id}
+          and replace(replace(coalesce(phone,''), ' ', ''), '-', '') like ${"%" + last9}
+        limit 1
+      `;
+    }
+    if (!parents[0] && email) {
+      parents = await sql<Parent>`
+        select * from parents
+        where school_id = ${school.id} and lower(coalesce(email,'')) = ${email}
+        limit 1
+      `;
+    }
+    if (!parents[0]) {
+      throw new Error(
+        "This phone/email is not registered at this school. Ask the office to register you as a parent first.",
+      );
+    }
+    const parent = parents[0];
+
+    // Validate students belong to school
+    for (const sid of studentIds) {
+      const st = await sql<{ id: string }>`
+        select id from students where id = ${sid} and school_id = ${school.id} limit 1
+      `;
+      if (!st[0]) throw new Error("One of the selected students is invalid");
+    }
+
+    const rl = checkRateLimit(`parent-link:${school.id}:${parent.id}`, 8, 60 * 60 * 1000);
+    if (!rl.ok) throw new Error(`Too many attempts. Try again in ${rl.retryAfterSec}s`);
+
+    const code = generateOtp();
+    const challengeId = `otp-link-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const expires = new Date(Date.now() + 10 * 60 * 1000);
+    const destPhone = normalizePhone(parent.phone || phone || "");
+
+    await sql.query(
+      `insert into parent_otp_challenges
+         (id, school_id, phone, code_hash, expires_at, pending_student_ids, parent_id, purpose)
+       values ($1,$2,$3,$4,$5,$6,$7,'link')`,
+      [
+        challengeId,
+        school.id,
+        destPhone || parent.email || email,
+        hashCode(code),
+        expires.toISOString(),
+        JSON.stringify(studentIds),
+        parent.id,
+      ],
+    );
+
+    const msg = `${school.parent_app_name || school.name}: Your code to link children is ${code}. Valid 10 minutes.`;
+    const channel = data.channel || (parent.phone ? "sms" : "email");
+    if (channel === "email") {
+      const to = parent.email || email;
+      if (!to) throw new Error("No email on file. Use SMS or ask the school to add your email.");
+      const { sendEmailForSchool } = await import("./email");
+      const mailCfg = await loadSchoolMailConfig(sql, school.id);
+      const er = await sendEmailForSchool(mailCfg, {
+        to,
+        subject: `${school.parent_app_name || school.name} — link verification`,
+        text: msg,
+        html: `<p>${msg}</p>`,
+        fromName: school.name,
+      });
+      if (!er.ok) throw new Error(er.error || "Failed to send email");
+    } else {
+      if (!destPhone) throw new Error("No phone on file. Use email channel or update parent record.");
+      const smsResult = await logSms(sql, school.id, destPhone, msg, "PARENT_LINK_OTP");
+      if (!smsResult.ok) {
+        throw new Error(smsResult.error || "Failed to send OTP SMS");
+      }
+    }
+
+    return {
+      ok: true,
+      challengeId,
+      message:
+        channel === "email"
+          ? "Code sent by email. Enter it to finish linking."
+          : "Code sent by SMS. Enter it to finish linking.",
+      channel,
+    };
+  });
+
+/** Verify OTP and auto-link selected students (no school approval). */
+export const verifyParentSelfLinkOtp = createServerFn({ method: "POST" })
+  .validator(
+    (data: { slug: string; challengeId: string; code: string }) => data,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const code = data.code.trim();
+    if (!code) throw new Error("Enter the code");
+
+    const rows = await sql<{
+      id: string;
+      school_id: string;
+      phone: string;
+      code_hash: string;
+      expires_at: string;
+      pending_student_ids: string | null;
+      parent_id: string | null;
+      purpose: string | null;
+      consumed_at: string | null;
+    }>`
+      select * from parent_otp_challenges where id = ${data.challengeId} limit 1
+    `;
+    const ch = rows[0];
+    if (!ch) throw new Error("Invalid or expired code");
+    if (ch.consumed_at) throw new Error("This code was already used");
+    if (new Date(ch.expires_at).getTime() < Date.now()) {
+      throw new Error("Code expired. Request a new one.");
+    }
+    if (ch.code_hash !== hashCode(code)) {
+      throw new Error("Incorrect code");
+    }
+
+    const parentId = ch.parent_id;
+    if (!parentId) throw new Error("Invalid link challenge");
+
+    let studentIds: string[] = [];
+    try {
+      studentIds = JSON.parse(ch.pending_student_ids || "[]");
+    } catch {
+      studentIds = [];
+    }
+    if (!studentIds.length) throw new Error("No students to link");
+
+    const school = await sql<School>`
+      select * from schools where id = ${ch.school_id} limit 1
+    `;
+    const uid = school[0]?.user_id || parentId;
+
+    for (const sid of studentIds) {
+      const linkId = nid(parentId, `ps-self-${sid}`);
+      try {
+        await sql.query(
+          `insert into parent_students (id, user_id, parent_id, student_id, relationship, is_primary)
+           values ($1,$2,$3,$4,'Guardian',true)
+           on conflict do nothing`,
+          [linkId, uid, parentId, sid],
+        );
+      } catch {
+        try {
+          await sql.query(
+            `insert into parent_student_links (id, school_id, parent_id, student_id, relationship)
+             values ($1,$2,$3,$4,'Guardian') on conflict do nothing`,
+            [linkId, ch.school_id, parentId, sid],
+          );
+        } catch {
+          /* already linked */
+        }
+      }
+    }
+
+    await sql.query(
+      `update parent_otp_challenges set consumed_at = now() where id = $1`,
+      [ch.id],
+    );
+
+    // Create session like verifyParentOtp
+    const token = randomToken(32);
+    const sessionId = nid(parentId, `psess-${Date.now()}`);
+    const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await sql.query(
+      `insert into parent_sessions (id, school_id, parent_id, token, expires_at)
+       values ($1,$2,$3,$4,$5)`,
+      [sessionId, ch.school_id, parentId, token, expires.toISOString()],
+    );
+
+    return {
+      ok: true,
+      token,
+      linked: studentIds.length,
+      message: `Linked ${studentIds.length} student(s). You are signed in.`,
+    };
+  });

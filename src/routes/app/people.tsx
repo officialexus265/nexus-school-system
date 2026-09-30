@@ -406,73 +406,8 @@ function PeoplePage() {
           </div>
         </TabsContent>
 
-      {verifications.filter((v) => v.status === "PENDING").length > 0 && (
-        <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-          <h2 className="font-display text-xl">Parent link requests</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Parents requested to link a child from the parent app. Approve to create the relationship.
-          </p>
-          <ul className="mt-3 space-y-2">
-            {verifications
-              .filter((v) => v.status === "PENDING")
-              .map((v) => (
-                <li
-                  key={v.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2 text-sm"
-                >
-                  <span>
-                    {v.parent_name || "Parent"} · {v.parent_phone}
-                    {v.student_number ? ` · student #${v.student_number}` : ""}
-                    {v.student_name_guess ? ` · ${v.student_name_guess}` : ""}
-                  </span>
-                  <span className="flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        try {
-                          await reviewParentVerification({
-                            data: {
-                              schoolId: snap.school.id,
-                              requestId: v.id,
-                              action: "APPROVE",
-                              studentId: v.student_id || undefined,
-                            },
-                          });
-                          toast.success("Approved");
-                          await loadVerifications(snap.school.id);
-                          await invalidate();
-                        } catch (e) {
-                          toast.error(e instanceof Error ? e.message : "Failed");
-                        }
-                      }}
-                    >
-                      Approve
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          await reviewParentVerification({
-                            data: {
-                              schoolId: snap.school.id,
-                              requestId: v.id,
-                              action: "REJECT",
-                            },
-                          });
-                          toast.success("Rejected");
-                          await loadVerifications(snap.school.id);
-                        } catch (e) {
-                          toast.error(e instanceof Error ? e.message : "Failed");
-                        }
-                      }}
-                    >
-                      Reject
-                    </Button>
-                  </span>
-                </li>
-              ))}
-          </ul>
+      {/* Parent self-link is OTP-based in the parent app — no school approval required. */}
+</ul>
         </section>
       )}
       </Tabs>

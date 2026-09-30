@@ -5,10 +5,13 @@ import {
   getParentPortalSession,
   getParentAppManifest,
   listParentMessages,
-  requestParentChildLink,
+  lookupParentContact,
+  lookupStudentAdmission,
+  requestParentSelfLinkOtp,
   requestParentOtp,
   sendParentMessage,
   verifyParentOtp,
+  verifyParentSelfLinkOtp,
 } from "@/lib/nexus/server";
 import { money, studentName } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,7 +28,7 @@ const SESSION_KEY = (slug: string) => `nexus_parent_session_${slug}`;
 
 function ParentPortalPage() {
   const { slug } = Route.useParams();
-  const [phase, setPhase] = useState<"boot" | "login" | "otp" | "app">("boot");
+  const [phase, setPhase] = useState<"boot" | "login" | "otp" | "link" | "link-otp" | "app">("boot");
   const [branding, setBranding] = useState<{
     name: string;
     appName: string;
@@ -42,6 +45,24 @@ function ParentPortalPage() {
   const [tab, setTab] = useState<"home" | "results" | "attendance" | "fees" | "notices" | "messages">("home");
   const [parentMsgs, setParentMsgs] = useState<{ id: string; sender_type: string; body: string; created_at: string }[]>([]);
   const [msgDraft, setMsgDraft] = useState("");
+  const [linkContact, setLinkContact] = useState("");
+  const [linkContactMode, setLinkContactMode] = useState<"phone" | "email">("phone");
+  const [linkParentHint, setLinkParentHint] = useState<{
+    found: boolean;
+    fullName?: string;
+    parentId?: string;
+  } | null>(null);
+  const [admInput, setAdmInput] = useState("");
+  const [admHint, setAdmHint] = useState<{
+    found: boolean;
+    student?: { id: string; name: string; admissionNumber: string; classLabel: string };
+    multiple?: { id: string; name: string; admissionNumber: string }[];
+  } | null>(null);
+  const [linkStudents, setLinkStudents] = useState<
+    { id: string; name: string; admissionNumber: string; classLabel: string }[]
+  >([]);
+  const [linkChallengeId, setLinkChallengeId] = useState<string | null>(null);
+  const [linkChannel, setLinkChannel] = useState<"sms" | "email">("sms");
 
   useEffect(() => {
     let cancelled = false;
@@ -278,33 +299,321 @@ function ParentPortalPage() {
               <button
                 type="button"
                 className="w-full text-center text-sm text-white/50 underline"
-                onClick={async () => {
-                  const studentNumber = window.prompt("Student admission number (if known)");
-                  const parentName = window.prompt("Your full name") || undefined;
-                  if (!phone) {
-                    setError("Enter your phone number first");
-                    return;
-                  }
-                  try {
-                    const res = await requestParentChildLink({
-                      data: {
-                        slug,
-                        parentPhone: phone,
-                        parentName,
-                        studentNumber: studentNumber || undefined,
-                      },
-                    });
-                    setError(null);
-                    alert(res.message);
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : "Request failed");
-                  }
+                onClick={() => {
+                  setPhase("link");
+                  setError(null);
+                  setLinkContact(phone);
                 }}
               >
-                New here? Request to link your child
+                Link children (phone/email + student number)
               </button>
             </form>
           )}
+
+          
+          {phase === "link" && (
+            <div className="mt-8 w-full max-w-sm space-y-4">
+              <p className="text-center text-sm text-white/80">
+                Use the phone or email the school registered for you, then add student numbers.
+              </p>
+              <div className="flex gap-4 text-sm text-white/80">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={linkContactMode === "phone"}
+                    onChange={() => {
+                      setLinkContactMode("phone");
+                      setLinkParentHint(null);
+                    }}
+                  />
+                  Phone
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={linkContactMode === "email"}
+                    onChange={() => {
+                      setLinkContactMode("email");
+                      setLinkParentHint(null);
+                    }}
+                  />
+                  Email
+                </label>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-white/80">
+                  {linkContactMode === "phone" ? "Parent phone *" : "Parent email *"}
+                </Label>
+                <Input
+                  type={linkContactMode === "email" ? "email" : "tel"}
+                  value={linkContact}
+                  onChange={async (e) => {
+                    const v = e.target.value;
+                    setLinkContact(v);
+                    setLinkParentHint(null);
+                    const q =
+                      linkContactMode === "phone"
+                        ? v.replace(/\D/g, "").length >= 8
+                        : v.includes("@") && v.length > 5;
+                    if (!q) return;
+                    try {
+                      const r = await lookupParentContact({
+                        data: {
+                          slug,
+                          phone: linkContactMode === "phone" ? v : undefined,
+                          email: linkContactMode === "email" ? v : undefined,
+                        },
+                      });
+                      if (r.found) {
+                        setLinkParentHint({
+                          found: true,
+                          fullName: r.fullName,
+                          parentId: r.parentId,
+                        });
+                      } else {
+                        setLinkParentHint({ found: false });
+                      }
+                    } catch {
+                      setLinkParentHint(null);
+                    }
+                  }}
+                  className="border-white/20 bg-white/10 text-white"
+                  placeholder={
+                    linkContactMode === "phone" ? "e.g. 0980697476" : "parent@email.com"
+                  }
+                />
+                {linkParentHint?.found && (
+                  <p className="text-sm text-emerald-300">
+                    Registered parent: <strong>{linkParentHint.fullName}</strong>
+                  </p>
+                )}
+                {linkParentHint && !linkParentHint.found && (
+                  <p className="text-sm text-amber-300">
+                    Not found in this school. Ask the office to register your number/email first.
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-white/80">Student admission number</Label>
+                <Input
+                  value={admInput}
+                  onChange={async (e) => {
+                    const v = e.target.value;
+                    setAdmInput(v);
+                    setAdmHint(null);
+                    if (v.trim().length < 2) return;
+                    try {
+                      const r = await lookupStudentAdmission({
+                        data: { slug, admissionNumber: v },
+                      });
+                      setAdmHint(r as typeof admHint);
+                    } catch {
+                      setAdmHint(null);
+                    }
+                  }}
+                  className="border-white/20 bg-white/10 text-white"
+                  placeholder="Type student number…"
+                />
+                {admHint?.found && admHint.student && (
+                  <button
+                    type="button"
+                    className="w-full rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-left text-sm text-white"
+                    onClick={() => {
+                      const st = admHint.student!;
+                      setLinkStudents((prev) =>
+                        prev.some((x) => x.id === st.id) ? prev : [...prev, st],
+                      );
+                      setAdmInput("");
+                      setAdmHint(null);
+                    }}
+                  >
+                    Add <strong>{admHint.student.name}</strong>
+                    <span className="text-white/60">
+                      {" "}
+                      · {admHint.student.admissionNumber} · {admHint.student.classLabel}
+                    </span>
+                  </button>
+                )}
+                {admHint && !admHint.found && admHint.multiple && (
+                  <div className="space-y-1">
+                    {admHint.multiple.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="w-full rounded-lg border border-white/20 px-3 py-2 text-left text-sm text-white"
+                        onClick={() => {
+                          setLinkStudents((prev) =>
+                            prev.some((x) => x.id === m.id)
+                              ? prev
+                              : [
+                                  ...prev,
+                                  {
+                                    id: m.id,
+                                    name: m.name,
+                                    admissionNumber: m.admissionNumber,
+                                    classLabel: "",
+                                  },
+                                ],
+                          );
+                          setAdmInput("");
+                          setAdmHint(null);
+                        }}
+                      >
+                        {m.name} · {m.admissionNumber}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {admHint && !admHint.found && !admHint.multiple && admInput.trim().length >= 3 && (
+                  <p className="text-xs text-white/50">No student with that number</p>
+                )}
+              </div>
+
+              {linkStudents.length > 0 && (
+                <ul className="space-y-1 rounded-lg border border-white/15 p-2 text-sm text-white">
+                  {linkStudents.map((s) => (
+                    <li key={s.id} className="flex items-center justify-between gap-2">
+                      <span>
+                        {s.name}
+                        <span className="text-white/50"> · {s.admissionNumber}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="text-xs text-red-300 underline"
+                        onClick={() =>
+                          setLinkStudents((prev) => prev.filter((x) => x.id !== s.id))
+                        }
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="space-y-1.5">
+                <Label className="text-white/80">Send code via</Label>
+                <div className="flex gap-4 text-sm text-white/80">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={linkChannel === "sms"}
+                      onChange={() => setLinkChannel("sms")}
+                    />
+                    SMS
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={linkChannel === "email"}
+                      onChange={() => setLinkChannel("email")}
+                    />
+                    Email
+                  </label>
+                </div>
+              </div>
+
+              {error && <p className="text-sm text-red-300">{error}</p>}
+              <Button
+                type="button"
+                disabled={busy || !linkParentHint?.found || !linkStudents.length}
+                className="w-full bg-white text-slate-900 hover:bg-white/90"
+                onClick={async () => {
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    const res = await requestParentSelfLinkOtp({
+                      data: {
+                        slug,
+                        phone: linkContactMode === "phone" ? linkContact : undefined,
+                        email: linkContactMode === "email" ? linkContact : undefined,
+                        studentIds: linkStudents.map((s) => s.id),
+                        channel: linkChannel,
+                      },
+                    });
+                    setLinkChallengeId(res.challengeId);
+                    setPhase("link-otp");
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Could not send code");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? "Sending…" : "Link students — send OTP"}
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-white/50 underline"
+                onClick={() => {
+                  setPhase("login");
+                  setError(null);
+                }}
+              >
+                Back to login
+              </button>
+            </div>
+          )}
+
+          {phase === "link-otp" && (
+            <form
+              className="mt-8 w-full max-w-sm space-y-4"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!linkChallengeId) return;
+                setBusy(true);
+                setError(null);
+                try {
+                  const res = await verifyParentSelfLinkOtp({
+                    data: {
+                      slug,
+                      challengeId: linkChallengeId,
+                      code,
+                    },
+                  });
+                  if (typeof localStorage !== "undefined") {
+                    localStorage.setItem(SESSION_KEY(slug), res.token);
+                  }
+                  const sessionData = await getParentPortalSession({
+                    data: { slug, token: res.token },
+                  });
+                  setData(sessionData);
+                  setPhase("app");
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Verification failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              <p className="text-center text-sm text-white/70">
+                Enter the code we sent to confirm linking{" "}
+                <strong className="text-white">{linkStudents.length}</strong> student(s).
+              </p>
+              <div className="space-y-1.5">
+                <Label className="text-white/80">6-digit code</Label>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  required
+                  className="border-white/20 bg-white/10 text-center text-lg tracking-[0.3em] text-white"
+                />
+              </div>
+              {error && <p className="text-sm text-red-300">{error}</p>}
+              <Button
+                type="submit"
+                disabled={busy || code.length < 4}
+                className="w-full bg-white text-slate-900 hover:bg-white/90"
+              >
+                {busy ? "Linking…" : "Verify & link"}
+              </Button>
+            </form>
+          )}
+
 
           {phase === "otp" && (
             <form onSubmit={handleVerifyOtp} className="mt-8 w-full max-w-sm space-y-4">
