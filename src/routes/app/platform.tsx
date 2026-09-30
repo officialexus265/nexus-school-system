@@ -34,6 +34,7 @@ import {
   applySchoolDiscount,
   listPlatformPromotions,
   createPlatformPromotion,
+  uploadPlatformFile,
   runLuckySchoolDraw,
   saveDiscountSettings,
 } from "@/lib/nexus/server";
@@ -1152,15 +1153,72 @@ function PlatformPage() {
                   />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
-                  <Label>OG image URL</Label>
+                  <Label>Share image (OG / WhatsApp preview)</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="text-sm"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (file.size > 5 * 1024 * 1024) {
+                          toast.error("Image must be under 5 MB");
+                          return;
+                        }
+                        try {
+                          toast.message("Uploading image…");
+                          const buf = await file.arrayBuffer();
+                          const bytes = new Uint8Array(buf);
+                          let binary = "";
+                          for (let i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]!);
+                          }
+                          const b64 = btoa(binary);
+                          const dataUri = `data:${file.type || "image/jpeg"};base64,${b64}`;
+                          const up = await uploadPlatformFile({
+                            data: {
+                              dataBase64: dataUri,
+                              filename: file.name,
+                              mimeType: file.type,
+                              purpose: "promo-og",
+                            },
+                          });
+                          const url =
+                            (up as { url?: string; secure_url?: string }).url ||
+                            (up as { secure_url?: string }).secure_url ||
+                            "";
+                          if (!url) throw new Error("Upload returned no URL");
+                          setPromoOg(url);
+                          toast.success("Image uploaded");
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Upload failed",
+                          );
+                        }
+                      }}
+                    />
+                  </div>
+                  {promoOg ? (
+                    <div className="mt-2 flex items-start gap-3">
+                      <img
+                        src={promoOg}
+                        alt="Promo preview"
+                        className="h-20 w-32 rounded-lg object-cover border border-border"
+                      />
+                      <p className="break-all text-xs text-muted-foreground">{promoOg}</p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Choose an image to upload (Cloudinary). Or paste a URL below if you already have one.
+                    </p>
+                  )}
                   <Input
+                    className="mt-2"
                     value={promoOg}
                     onChange={(e) => setPromoOg(e.target.value)}
-                    placeholder="https://… (upload to Cloudinary, paste URL)"
+                    placeholder="Or paste image URL"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Upload the image in School settings / Cloudinary, then paste the public URL here.
-                  </p>
                 </div>
                 {promoKind === "DISCOUNT" && (
                   <div className="space-y-1">
@@ -1186,21 +1244,95 @@ function PlatformPage() {
                       },
                     });
                     setPromoShareUrl(r.shareUrl);
-                    try {
-                      await navigator.clipboard.writeText(r.shareUrl);
-                      toast.success("Promotion created — link copied");
-                    } catch {
-                      toast.success("Promotion created");
-                    }
+                    toast.success("Promotion ready — use Share below");
                   } catch (e) {
                     toast.error(e instanceof Error ? e.message : "Failed");
                   }
                 }}
               >
-                Create promotion link
+                Create promotion
               </Button>
               {promoShareUrl && (
-                <p className="mt-3 break-all text-sm text-primary">{promoShareUrl}</p>
+                <div className="mt-4 space-y-3 rounded-xl border border-border bg-secondary/30 p-4">
+                  <p className="break-all text-sm">{promoShareUrl}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      onClick={async () => {
+                        const text = [
+                          promoTitle.trim(),
+                          promoDesc.trim(),
+                          promoShareUrl,
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n");
+                        try {
+                          if (navigator.share) {
+                            const shareData: ShareData = {
+                              title: promoTitle.trim() || "NEXUS",
+                              text: promoDesc.trim() || promoTitle.trim(),
+                              url: promoShareUrl,
+                            };
+                            // Some browsers support files in share
+                            if (promoOg && navigator.canShare) {
+                              try {
+                                const res = await fetch(promoOg);
+                                const blob = await res.blob();
+                                const file = new File(
+                                  [blob],
+                                  "promo.jpg",
+                                  { type: blob.type || "image/jpeg" },
+                                );
+                                const withFile = { ...shareData, files: [file] };
+                                if (navigator.canShare(withFile)) {
+                                  await navigator.share(withFile);
+                                  return;
+                                }
+                              } catch {
+                                /* fall through to URL share */
+                              }
+                            }
+                            await navigator.share(shareData);
+                            return;
+                          }
+                        } catch (e) {
+                          if ((e as Error).name === "AbortError") return;
+                        }
+                        // WhatsApp fallback
+                        const wa = `https://wa.me/?text=${encodeURIComponent(text)}`;
+                        window.open(wa, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      Share
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        const wa = `https://wa.me/?text=${encodeURIComponent(
+                          `${promoTitle}\n\n${promoDesc}\n\n${promoShareUrl}`,
+                        )}`;
+                        window.open(wa, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      Share on WhatsApp
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(promoShareUrl);
+                          toast.success("Link copied");
+                        } catch {
+                          toast.message(promoShareUrl);
+                        }
+                      }}
+                    >
+                      Copy link
+                    </Button>
+                  </div>
+                </div>
               )}
             </section>
 

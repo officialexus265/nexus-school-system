@@ -5973,6 +5973,34 @@ export async function assertSchoolNotLocked(userId: string, schoolId: string) {
 }
 
 
+/** Platform owner upload (promotions OG images, etc.) via Cloudinary. */
+export const uploadPlatformFile = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      dataBase64: string;
+      filename?: string;
+      mimeType?: string;
+      purpose?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const { storageProvider, uploadToCloudinary } = await import("./storage");
+    if (storageProvider() !== "cloudinary") {
+      throw new Error(
+        "Set STORAGE_PROVIDER=cloudinary and Cloudinary env vars to upload images.",
+      );
+    }
+    return uploadToCloudinary({
+      dataBase64: data.dataBase64,
+      folder: `nexus/platform/${data.purpose || "promos"}`,
+      filename: data.filename,
+      mimeType: data.mimeType,
+    });
+  });
+
 /** Upload image/file via Cloudinary (or register external URL). */
 export const uploadSchoolFile = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
