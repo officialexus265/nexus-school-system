@@ -7821,20 +7821,32 @@ export const acceptStaffInviteWithPassword = createServerFn({ method: "POST" })
     const fullName = (data.name || inv.full_name || email).trim();
     const roleTitle = (inv.role_name || "teacher").toLowerCase();
 
-    // Prefer Better Auth crypto so sign-in verifies the same hash
+    // Hash with Better Auth so signIn.email accepts the same password.
+    // Password hash must match Better Auth sign-in verification.
     let passwordHash: string;
     try {
-      const { hashPassword } = await import("better-auth/crypto");
-      passwordHash = await hashPassword(password);
-    } catch {
+      const cryptoMod = await import("better-auth/crypto");
+      if (typeof cryptoMod.hashPassword !== "function") {
+        throw new Error("hashPassword missing on better-auth/crypto");
+      }
+      passwordHash = await cryptoMod.hashPassword(password);
+    } catch (e) {
+      // Last resort: use the auth instance helper if present
       try {
-        // Some builds export from better-auth/crypto/password
-        const mod = await import("better-auth/crypto/password");
-        const hp = (mod as { hashPassword: (p: string) => Promise<string> }).hashPassword;
-        passwordHash = await hp(password);
-      } catch {
+        const { auth } = await import("@/lib/auth/server");
+        const api = auth as unknown as {
+          $context?: Promise<{ password?: { hash: (p: string) => Promise<string> } }>;
+        };
+        const ctx = api.$context ? await api.$context : null;
+        if (ctx?.password?.hash) {
+          passwordHash = await ctx.password.hash(password);
+        } else {
+          throw e;
+        }
+      } catch (e2) {
         throw new Error(
-          "Password hashing unavailable. Ensure better-auth is installed and redeploy.",
+          "Could not hash password with Better Auth. " +
+            (e2 instanceof Error ? e2.message : "Unknown hash error"),
         );
       }
     }
