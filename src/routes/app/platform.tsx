@@ -106,6 +106,9 @@ function PlatformPage() {
   const [wipeBusy, setWipeBusy] = useState(false);
 
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
+  const [discountDialog, setDiscountDialog] = useState<{ id: string; name: string } | null>(null);
+  const [discountPct, setDiscountPct] = useState("10");
+  const [discountBusy, setDiscountBusy] = useState(false);
   const [purgeBusy, setPurgeBusy] = useState(false);
 
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
@@ -553,26 +556,9 @@ function PlatformPage() {
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        onClick={async () => {
-                                          const pct = window.prompt(
-                                            "Activation discount % for this school (0-100)",
-                                            "10",
-                                          );
-                                          if (pct == null) return;
-                                          try {
-                                            await applySchoolDiscount({
-                                              data: {
-                                                schoolId: s.id,
-                                                activationDiscountPct: Number(pct) || 0,
-                                              },
-                                            });
-                                            toast.success("Discount applied");
-                                            await invalidate();
-                                          } catch (e) {
-                                            toast.error(
-                                              e instanceof Error ? e.message : "Failed",
-                                            );
-                                          }
+                                        onClick={() => {
+                                          setDiscountPct("10");
+                                          setDiscountDialog({ id: s.id, name: s.name });
                                         }}
                                       >
                                         Set discount
@@ -1419,6 +1405,68 @@ function PlatformPage() {
 
 
       {/* —— Professional dialogs —— */}
+
+      <Dialog open={!!discountDialog} onOpenChange={(o) => !o && setDiscountDialog(null)}>
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Next-period discount</DialogTitle>
+            <DialogDescription>
+              Offer a percentage off for{" "}
+              <span className="font-medium text-foreground">{discountDialog?.name}</span>.
+              This applies only to their <strong>next</strong> billing period (next invoice or
+              subscription payment), not the period they are already in. After that payment is
+              made—or if the current period ends without using it—the discount is removed
+              automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label>Discount %</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={discountPct}
+              onChange={(e) => setDiscountPct(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Use 0 to clear an unused next-period discount.</p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDiscountDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={discountBusy}
+              onClick={async () => {
+                if (!discountDialog) return;
+                setDiscountBusy(true);
+                try {
+                  await applySchoolDiscount({
+                    data: {
+                      schoolId: discountDialog.id,
+                      nextPeriodDiscountPct: Number(discountPct) || 0,
+                    },
+                  });
+                  toast.success(
+                    Number(discountPct) > 0
+                      ? `${discountPct}% off next billing period only`
+                      : "Next-period discount cleared",
+                  );
+                  setDiscountDialog(null);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                } finally {
+                  setDiscountBusy(false);
+                }
+              }}
+            >
+              {discountBusy ? "Saving…" : "Apply discount"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!grantDialog} onOpenChange={(o) => !o && setGrantDialog(null)}>
         <DialogContent className="max-w-md border-0 shadow-2xl sm:rounded-2xl">
           <DialogHeader>

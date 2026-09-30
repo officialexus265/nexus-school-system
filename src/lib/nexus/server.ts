@@ -2842,9 +2842,17 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
       const period =
         ((school as { billing_period?: string }).billing_period as BillingPeriod) ||
         defaultPeriod;
-      const amount =
+      let amount =
         priceMatrix[tier]?.[period] ??
         priceFor(tier, period);
+      const nextDisc = Number(
+        (school as { next_billing_discount_pct?: number }).next_billing_discount_pct || 0,
+      );
+      let consumeInvDiscount = false;
+      if (nextDisc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - nextDisc / 100)));
+        consumeInvDiscount = true;
+      }
       const bounds = periodBounds(period);
       const start = toDateStr(bounds.start);
       const end = toDateStr(bounds.end);
@@ -2908,6 +2916,16 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
           context.userId,
         ],
       );
+      if (consumeInvDiscount) {
+        try {
+          await sql.query(
+            `update schools set next_billing_discount_pct = 0, next_billing_discount_set_at = null where id = $1`,
+            [school.id],
+          );
+        } catch {
+          /* ignore */
+        }
+      }
       created.push({
         schoolId: school.id,
         schoolName: school.name,
@@ -8588,29 +8606,41 @@ export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST"
     let monthsToAdd = periodMonths(data.period);
     let detail = "";
 
+    const nextDisc = Number(
+      (school as { next_billing_discount_pct?: number }).next_billing_discount_pct || 0,
+    );
+    let consumeDiscount = false;
+
     if (data.mode === "activate") {
       amount = pf(tier, data.period);
-      const fdisc = Number(
-        (school as { first_sub_discount_pct?: number }).first_sub_discount_pct || 0,
-      );
-      if (fdisc > 0) {
-        amount = Math.max(0, Math.round(amount * (1 - fdisc / 100)));
-        detail = `First subscription (${data.period}) after ${fdisc}% discount`;
+      // Next-period / first-pay discount (not a free current period)
+      if (nextDisc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - nextDisc / 100)));
+        detail = `First subscription (${data.period}) — ${nextDisc}% next-period discount`;
+        consumeDiscount = true;
       } else {
         detail = `First subscription (${data.period})`;
       }
     } else if (data.mode === "extend") {
       amount = extendPrice(tier, data.period);
-      detail = `Extend +${data.period} (${monthsToAdd} months)`;
+      if (nextDisc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - nextDisc / 100)));
+        detail = `Extend +${data.period} — ${nextDisc}% next-period discount`;
+        consumeDiscount = true;
+      } else {
+        detail = `Extend +${data.period} (${monthsToAdd} months)`;
+      }
     } else if (data.mode === "upgrade") {
       const up = upgradePrice(tier, currentPeriod, data.period);
       amount = up.amountDue;
-      monthsToAdd = periodMonths(data.period); // subscription end becomes from now + full target period (paid as upgrade)
-      // Better: remaining = max(current end, now) then add difference in months only
-      // Spec: upgrade term→year pays difference and becomes yearly from activation logic:
-      // set period to annual and set expiry to max(now, existing) + (annual months - term months already "used")
-      // Simpler product rule: upgrade sets end = now + full target period months (credit applied to price only)
-      detail = `Upgrade ${currentPeriod}→${data.period} (credit ${up.credit})`;
+      monthsToAdd = periodMonths(data.period);
+      if (nextDisc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - nextDisc / 100)));
+        detail = `Upgrade ${currentPeriod}→${data.period} (credit ${up.credit}) — ${nextDisc}% next-period discount`;
+        consumeDiscount = true;
+      } else {
+        detail = `Upgrade ${currentPeriod}→${data.period} (credit ${up.credit})`;
+      }
       if (amount <= 0) {
         // free upgrade path — apply immediately
         const months = periodMonths(data.period);
@@ -8695,6 +8725,17 @@ export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST"
         );
       } catch (e2) {
         console.error("[subscription intent fallback]", e2);
+      }
+    }
+
+    if (consumeDiscount) {
+      try {
+        await sql.query(
+          `update schools set next_billing_discount_pct = 0, next_billing_discount_set_at = null where id = $1`,
+          [data.schoolId],
+        );
+      } catch {
+        /* ignore */
       }
     }
 
@@ -9025,7 +9066,9 @@ export async function processSubscriptionLifecycle(): Promise<{
       `update schools set
          status = 'GRACE_PERIOD',
          grace_ends_at = now() + interval '15 days',
-         status_reason = $1
+         status_reason = $1,
+         next_billing_discount_pct = 0,
+         next_billing_discount_set_at = null
        where id = $2`,
       [
         "Subscription period ended — 15 days to renew before pause",
@@ -9626,13 +9669,20 @@ export const runLuckySchoolDraw = createServerFn({ method: "POST" })
     return { ok: true, total: n, selected: winners.length, discountPct: disc, sharePct: share };
   });
 
+/**
+ * Discount applies ONLY to the next billing period (next invoice / next subscription payment),
+ * not the period the school is currently in. After that payment/invoice uses it, or the
+ * window passes without use, the discount is cleared.
+ */
 export const applySchoolDiscount = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
     (data: {
       schoolId: string;
+      /** % off next billing period only (0 clears) */
+      nextPeriodDiscountPct?: number;
+      /** Optional: still allow one-time activation fee discount for unpaid activation */
       activationDiscountPct?: number;
-      firstSubDiscountPct?: number;
     }) => data,
   )
   .handler(async ({ context, data }) => {
@@ -9641,13 +9691,27 @@ export const applySchoolDiscount = createServerFn({ method: "POST" })
     const sql = await getSql();
     try {
       await sql.query(
-        `alter table schools add column if not exists activation_discount_pct numeric default 0`,
+        `alter table schools add column if not exists next_billing_discount_pct numeric default 0`,
       );
       await sql.query(
-        `alter table schools add column if not exists first_sub_discount_pct numeric default 0`,
+        `alter table schools add column if not exists next_billing_discount_set_at timestamptz`,
+      );
+      await sql.query(
+        `alter table schools add column if not exists activation_discount_pct numeric default 0`,
       );
     } catch {
       /* ignore */
+    }
+
+    if (data.nextPeriodDiscountPct != null) {
+      const pct = Math.min(100, Math.max(0, Number(data.nextPeriodDiscountPct) || 0));
+      await sql.query(
+        `update schools set
+           next_billing_discount_pct = $1,
+           next_billing_discount_set_at = case when $1 > 0 then now() else null end
+         where id = $2`,
+        [pct, data.schoolId],
+      );
     }
     if (data.activationDiscountPct != null) {
       await sql.query(
@@ -9655,14 +9719,23 @@ export const applySchoolDiscount = createServerFn({ method: "POST" })
         [Math.min(100, Math.max(0, data.activationDiscountPct)), data.schoolId],
       );
     }
-    if (data.firstSubDiscountPct != null) {
-      await sql.query(
-        `update schools set first_sub_discount_pct = $1 where id = $2`,
-        [Math.min(100, Math.max(0, data.firstSubDiscountPct)), data.schoolId],
-      );
-    }
     return { ok: true };
   });
+
+/** Clear next-period discount after it has been used once. */
+async function consumeNextPeriodDiscount(
+  sql: Awaited<ReturnType<typeof getSql>>,
+  schoolId: string,
+) {
+  try {
+    await sql.query(
+      `update schools set next_billing_discount_pct = 0, next_billing_discount_set_at = null where id = $1`,
+      [schoolId],
+    );
+  } catch {
+    /* ignore */
+  }
+}
 
 export const createPlatformPromotion = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
