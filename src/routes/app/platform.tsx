@@ -4,6 +4,14 @@ import { toast } from "sonner";
 import { PageHeader, StatCard } from "@/components/page-header";
 import { StatusPill } from "@/components/status-pill";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,6 +78,29 @@ function PlatformPage() {
     ownerName: string;
     ownerEmail: string;
   } | null>(null);
+  const [grantDialog, setGrantDialog] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [grantUnit, setGrantUnit] = useState<"days" | "months" | "terms" | "years">("months");
+  const [grantAmount, setGrantAmount] = useState("1");
+  const [grantReason, setGrantReason] = useState("Partner / pilot access");
+  const [grantStack, setGrantStack] = useState(false);
+  const [grantBusy, setGrantBusy] = useState(false);
+
+  const [pauseDialog, setPauseDialog] = useState<{ id: string; name: string } | null>(null);
+  const [pauseReason, setPauseReason] = useState("Subscription fee not paid");
+  const [pauseBusy, setPauseBusy] = useState(false);
+
+  const [deleteDialog, setDeleteDialog] = useState<{ id: string; name: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const [wipeDialogOpen, setWipeDialogOpen] = useState(false);
+  const [wipeConfirmText, setWipeConfirmText] = useState("");
+  const [wipeBusy, setWipeBusy] = useState(false);
+
+  const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
+  const [purgeBusy, setPurgeBusy] = useState(false);
 
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
 
@@ -236,31 +267,10 @@ function PlatformPage() {
         description="Manage schools, account requests, and login contact details."
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    "Delete ALL schools and related data? This cannot be undone.",
-                  )
-                )
-                  return;
-                try {
-                  const typed = window.prompt(
-                    'Type DELETE ALL SCHOOLS to confirm. This cannot be undone.',
-                  );
-                  if (typed !== "DELETE ALL SCHOOLS") {
-                    toast.message("Wipe cancelled");
-                    return;
-                  }
-                  const r = await wipeAllSchools();
-                  toast.success(`Removed ${r.deleted} school(s)`);
-                  await invalidate();
-                } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Failed");
-                }
-              }}
-            >
+            <Button variant="outline" onClick={() => {
+              setWipeConfirmText("");
+              setWipeDialogOpen(true);
+            }}>
               Wipe all schools
             </Button>
             <Button
@@ -365,26 +375,7 @@ function PlatformPage() {
                     size="sm"
                     className="shrink-0"
                     title="Permanently remove schools whose 14-day export grace after deletion has ended. Soft-deleted schools that are still within 14 days are not touched."
-                    onClick={async () => {
-                      if (
-                        !window.confirm(
-                          "Permanently delete schools whose 14-day grace period after soft-delete has expired?\n\nSchools still inside the 14-day window are not affected.",
-                        )
-                      ) {
-                        return;
-                      }
-                      try {
-                        const r = await purgeExpiredDeletedSchools();
-                        toast.success(
-                          r.purged
-                            ? `Permanently removed ${r.purged} school(s)`
-                            : "No expired soft-deletes to purge",
-                        );
-                        await invalidate();
-                      } catch (e) {
-                        toast.error(e instanceof Error ? e.message : "Purge failed");
-                      }
-                    }}
+                    onClick={() => setPurgeDialogOpen(true)}
                   >
                     Purge expired deletions
                   </Button>
@@ -544,64 +535,13 @@ function PlatformPage() {
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        className="text-emerald-700"
-                                        onClick={async () => {
-                                          const unitRaw = window.prompt(
-                                            "Grant free/partner access.\nUnit: days | months | terms | years\n(1 term = 4 months)",
-                                            "months",
-                                          );
-                                          if (!unitRaw) return;
-                                          const unit = unitRaw.trim().toLowerCase();
-                                          if (
-                                            !["days", "months", "terms", "years"].includes(unit)
-                                          ) {
-                                            toast.error("Use days, months, terms, or years");
-                                            return;
-                                          }
-                                          const amountRaw = window.prompt(
-                                            `How many ${unit}?`,
-                                            unit === "days" ? "14" : unit === "terms" ? "1" : "1",
-                                          );
-                                          if (!amountRaw) return;
-                                          const amount = Number(amountRaw);
-                                          if (!amount || amount < 1) {
-                                            toast.error("Enter a positive number");
-                                            return;
-                                          }
-                                          const reason =
-                                            window.prompt(
-                                              "Label for this grant (shown in ledger):",
-                                              "Partner / pilot access",
-                                            ) || "Partner / pilot access";
-                                          const stack =
-                                            window.confirm(
-                                              "OK = add on top of current end date\nCancel = start the period from today",
-                                            ) === true;
-                                          try {
-                                            const r = await grantSchoolAccessPeriod({
-                                              data: {
-                                                schoolId: s.id,
-                                                amount,
-                                                unit: unit as
-                                                  | "days"
-                                                  | "months"
-                                                  | "terms"
-                                                  | "years",
-                                                reason,
-                                                stack,
-                                              },
-                                            });
-                                            toast.success(
-                                              r.expiresAt
-                                                ? `Access until ${String(r.expiresAt).slice(0, 10)}`
-                                                : "Access granted",
-                                            );
-                                            await invalidate();
-                                          } catch (e) {
-                                            toast.error(
-                                              e instanceof Error ? e.message : "Grant failed",
-                                            );
-                                          }
+                                        className="border-emerald-600/40 text-emerald-800"
+                                        onClick={() => {
+                                          setGrantUnit("months");
+                                          setGrantAmount("1");
+                                          setGrantReason("Partner / pilot access");
+                                          setGrantStack(false);
+                                          setGrantDialog({ id: s.id, name: s.name });
                                         }}
                                       >
                                         Grant access
@@ -610,28 +550,10 @@ function PlatformPage() {
                                         <Button
                                           size="sm"
                                           variant="outline"
-                                          className="text-amber-700"
-                                          onClick={async () => {
-                                            const reason = window.prompt(
-                                              "Pause reason (shown to school staff):",
-                                              "Subscription fee not paid",
-                                            );
-                                            if (!reason?.trim()) return;
-                                            try {
-                                              await transitionSchoolStatus({
-                                                data: {
-                                                  schoolId: s.id,
-                                                  toStatus: "PAUSED" as never,
-                                                  reason: reason.trim(),
-                                                },
-                                              });
-                                              toast.success("School paused");
-                                              await invalidate();
-                                            } catch (e) {
-                                              toast.error(
-                                                e instanceof Error ? e.message : "Failed",
-                                              );
-                                            }
+                                          className="text-amber-800"
+                                          onClick={() => {
+                                            setPauseReason("Subscription fee not paid");
+                                            setPauseDialog({ id: s.id, name: s.name });
                                           }}
                                         >
                                           Pause
@@ -667,27 +589,9 @@ function PlatformPage() {
                                           size="sm"
                                           variant="outline"
                                           className="text-red-600"
-                                          onClick={async () => {
-                                            if (
-                                              !window.confirm(
-                                                `Soft-delete “${s.name}”? Owner has 14 days to export data, then permanent wipe.`,
-                                              )
-                                            )
-                                              return;
-                                            try {
-                                              const r = await deleteSchool({
-                                                data: { schoolId: s.id },
-                                              });
-                                              toast.success(
-                                                r.message || "Scheduled for deletion",
-                                              );
-                                              await invalidate();
-                                            } catch (e) {
-                                              toast.error(
-                                                e instanceof Error ? e.message : "Failed",
-                                              );
-                                            }
-                                          }}
+                                          onClick={() =>
+                                            setDeleteDialog({ id: s.id, name: s.name })
+                                          }
                                         >
                                           Delete
                                         </Button>
@@ -1178,6 +1082,298 @@ function PlatformPage() {
           </div>
         </div>
       )}
+
+
+      {/* —— Professional dialogs —— */}
+      <Dialog open={!!grantDialog} onOpenChange={(o) => !o && setGrantDialog(null)}>
+        <DialogContent className="max-w-md border-0 shadow-2xl sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Grant free access</DialogTitle>
+            <DialogDescription>
+              Activate{" "}
+              <span className="font-medium text-foreground">{grantDialog?.name}</span> for a
+              pilot or partner period. No payment required for this window.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Duration</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={grantAmount}
+                  onChange={(e) => setGrantAmount(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Unit</Label>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={grantUnit}
+                  onChange={(e) =>
+                    setGrantUnit(e.target.value as typeof grantUnit)
+                  }
+                >
+                  <option value="days">Days</option>
+                  <option value="months">Months</option>
+                  <option value="terms">Terms (4 months each)</option>
+                  <option value="years">Years</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Label (ledger)</Label>
+              <Input
+                value={grantReason}
+                onChange={(e) => setGrantReason(e.target.value)}
+                placeholder="e.g. Pilot — PEFA, Partner 2026"
+              />
+            </div>
+            <label className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 p-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={grantStack}
+                onChange={(e) => setGrantStack(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Stack on current end date</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Off = period starts today. On = add this time after any remaining access.
+                </span>
+              </span>
+            </label>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setGrantDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={grantBusy}
+              className="bg-emerald-700 hover:bg-emerald-800"
+              onClick={async () => {
+                if (!grantDialog) return;
+                const amount = Number(grantAmount);
+                if (!amount || amount < 1) {
+                  toast.error("Enter a positive duration");
+                  return;
+                }
+                setGrantBusy(true);
+                try {
+                  const r = await grantSchoolAccessPeriod({
+                    data: {
+                      schoolId: grantDialog.id,
+                      amount,
+                      unit: grantUnit,
+                      reason: grantReason.trim() || "Partner / pilot access",
+                      stack: grantStack,
+                    },
+                  });
+                  toast.success(
+                    r.expiresAt
+                      ? `Access until ${String(r.expiresAt).slice(0, 10)}`
+                      : "Access granted",
+                  );
+                  setGrantDialog(null);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Grant failed");
+                } finally {
+                  setGrantBusy(false);
+                }
+              }}
+            >
+              {grantBusy ? "Granting…" : "Grant access"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pauseDialog} onOpenChange={(o) => !o && setPauseDialog(null)}>
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Pause school</DialogTitle>
+            <DialogDescription>
+              Staff and the parent app will be blocked. Show a clear reason for{" "}
+              <span className="font-medium text-foreground">{pauseDialog?.name}</span>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label>Reason (visible to the school)</Label>
+            <Input
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              placeholder="e.g. Subscription fee not paid"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPauseDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={pauseBusy || !pauseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+              onClick={async () => {
+                if (!pauseDialog || !pauseReason.trim()) return;
+                setPauseBusy(true);
+                try {
+                  await transitionSchoolStatus({
+                    data: {
+                      schoolId: pauseDialog.id,
+                      toStatus: "PAUSED" as never,
+                      reason: pauseReason.trim(),
+                    },
+                  });
+                  toast.success("School paused");
+                  setPauseDialog(null);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                } finally {
+                  setPauseBusy(false);
+                }
+              }}
+            >
+              {pauseBusy ? "Pausing…" : "Pause operations"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteDialog} onOpenChange={(o) => !o && setDeleteDialog(null)}>
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Delete school?</DialogTitle>
+            <DialogDescription>
+              <span className="font-medium text-foreground">{deleteDialog?.name}</span> will
+              enter a <strong>14-day grace</strong> period. The owner can export data; after that
+              you can purge permanently. This is not an immediate wipe.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleteBusy}
+              onClick={async () => {
+                if (!deleteDialog) return;
+                setDeleteBusy(true);
+                try {
+                  await deleteSchool({ data: { schoolId: deleteDialog.id } });
+                  toast.success("School marked for deletion (14-day grace)");
+                  setDeleteDialog(null);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Delete failed");
+                } finally {
+                  setDeleteBusy(false);
+                }
+              }}
+            >
+              {deleteBusy ? "Deleting…" : "Soft-delete school"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={wipeDialogOpen} onOpenChange={setWipeDialogOpen}>
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl text-red-700">
+              Wipe all schools
+            </DialogTitle>
+            <DialogDescription>
+              Permanently removes <strong>every</strong> school and related data on this platform.
+              This cannot be undone. Only use on empty test environments.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label>
+              Type <code className="rounded bg-secondary px-1">DELETE ALL SCHOOLS</code> to confirm
+            </Label>
+            <Input
+              value={wipeConfirmText}
+              onChange={(e) => setWipeConfirmText(e.target.value)}
+              placeholder="DELETE ALL SCHOOLS"
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setWipeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={wipeBusy || wipeConfirmText !== "DELETE ALL SCHOOLS"}
+              onClick={async () => {
+                setWipeBusy(true);
+                try {
+                  const r = await wipeAllSchools();
+                  toast.success(`Removed ${r.deleted} school(s)`);
+                  setWipeDialogOpen(false);
+                  setWipeConfirmText("");
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                } finally {
+                  setWipeBusy(false);
+                }
+              }}
+            >
+              {wipeBusy ? "Wiping…" : "Wipe everything"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={purgeDialogOpen} onOpenChange={setPurgeDialogOpen}>
+        <DialogContent className="max-w-md sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl">Purge expired deletions</DialogTitle>
+            <DialogDescription>
+              Permanently removes only schools whose <strong>14-day export grace</strong> after
+              soft-delete has ended. Active and recently deleted schools are not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPurgeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={purgeBusy}
+              onClick={async () => {
+                setPurgeBusy(true);
+                try {
+                  const r = await purgeExpiredDeletedSchools();
+                  toast.success(
+                    r.purged
+                      ? `Permanently removed ${r.purged} school(s)`
+                      : "No expired soft-deletes to purge",
+                  );
+                  setPurgeDialogOpen(false);
+                  await invalidate();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Purge failed");
+                } finally {
+                  setPurgeBusy(false);
+                }
+              }}
+            >
+              {purgeBusy ? "Purging…" : "Purge now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

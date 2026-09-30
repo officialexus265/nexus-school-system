@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSql } from "@/lib/db";
+import { processSubscriptionLifecycle } from "@/lib/nexus/server";
 
 /**
  * Hands-off ops endpoint.
@@ -105,7 +106,12 @@ async function handleCron(request: Request): Promise<Response> {
       results.fee_reminders = { schools: perSchool.length, details: perSchool };
     }
 
+    if (job === "all" || job === "subscription_lifecycle") {
+      results.subscription_lifecycle = await processSubscriptionLifecycle();
+    }
+
     if (job === "all" || job === "process_queue") {
+
       const jobs = await claimNextJobs(20);
       const processed: { id: string; type: string; ok: boolean; detail?: string }[] = [];
       for (const j of jobs) {

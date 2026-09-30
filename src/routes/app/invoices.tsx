@@ -7,13 +7,20 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   generatePlatformInvoices,
+  getPlatformPriceList,
   getSubscriptionDueAlerts,
   listPlatformInvoices,
   markPlatformInvoicePaid,
+  savePlatformPriceList,
   sendPlatformInvoice,
   initiatePlatformInvoicePayment,
 } from "@/lib/nexus/server";
-import { BILLING_TIER_OPTIONS, SUBSCRIPTION_PRICES, formatMwk } from "@/lib/nexus/billing";
+import {
+  BILLING_TIER_OPTIONS,
+  SUBSCRIPTION_PRICES,
+  formatMwk,
+  type BillingPeriod,
+} from "@/lib/nexus/billing";
 import { money } from "@/lib/utils";
 
 export const Route = createFileRoute("/app/invoices")({ component: InvoicesPage });
@@ -27,16 +34,21 @@ function InvoicesPage() {
   const [alerts, setAlerts] = useState<
     Awaited<ReturnType<typeof getSubscriptionDueAlerts>>["alerts"]
   >([]);
+  const [prices, setPrices] = useState(SUBSCRIPTION_PRICES);
+  const [priceBusy, setPriceBusy] = useState(false);
+  const [editingPrices, setEditingPrices] = useState(false);
 
   async function refresh() {
     setLoading(true);
     try {
-      const [inv, al] = await Promise.all([
+      const [inv, al, pl] = await Promise.all([
         listPlatformInvoices(),
         getSubscriptionDueAlerts(),
+        getPlatformPriceList({ data: {} }).catch(() => null),
       ]);
       setData(inv);
       setAlerts(al.alerts);
+      if (pl?.prices) setPrices(pl.prices as typeof SUBSCRIPTION_PRICES);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load invoices");
     } finally {
@@ -132,9 +144,57 @@ function InvoicesPage() {
         </section>
       )}
 
-      {/* Price card */}
+      {/* Price card — editable */}
       <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
-        <h2 className="font-display text-xl">Price list (MWK)</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xl">Price list (MWK)</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Used for new invoices and school quotes. Defaults match your published tiers; edit and
+              save to override.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {!editingPrices ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => setEditingPrices(true)}>
+                Edit prices
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEditingPrices(false);
+                    void refresh();
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={priceBusy}
+                  onClick={async () => {
+                    setPriceBusy(true);
+                    try {
+                      await savePlatformPriceList({ data: { prices } });
+                      toast.success("Price list saved");
+                      setEditingPrices(false);
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Save failed");
+                    } finally {
+                      setPriceBusy(false);
+                    }
+                  }}
+                >
+                  {priceBusy ? "Saving…" : "Save prices"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full min-w-[480px] text-left text-sm">
             <thead className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -148,10 +208,27 @@ function InvoicesPage() {
             <tbody>
               {BILLING_TIER_OPTIONS.map((o) => (
                 <tr key={o.value} className="border-t border-border">
-                  <td className="py-2">{o.label}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].monthly)}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].term)}</td>
-                  <td className="py-2 tabular-nums">{formatMwk(SUBSCRIPTION_PRICES[o.value].annual)}</td>
+                  <td className="py-2 pr-2">{o.label}</td>
+                  {(["monthly", "term", "annual"] as BillingPeriod[]).map((per) => (
+                    <td key={per} className="py-2 tabular-nums">
+                      {editingPrices ? (
+                        <input
+                          type="number"
+                          className="w-28 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                          value={prices[o.value]?.[per] ?? 0}
+                          onChange={(e) => {
+                            const n = Number(e.target.value) || 0;
+                            setPrices((prev) => ({
+                              ...prev,
+                              [o.value]: { ...prev[o.value], [per]: n },
+                            }));
+                          }}
+                        />
+                      ) : (
+                        formatMwk(prices[o.value]?.[per] ?? 0)
+                      )}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>

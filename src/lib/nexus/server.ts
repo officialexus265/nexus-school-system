@@ -232,10 +232,7 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
         school.status === "PAUSED" ||
         school.status === "CANCELLED" ||
         school.status === "PENDING_PAYMENT" ||
-        school.status === "DELETED_PENDING_PURGE" ||
-        (Boolean(school.subscription_expires_at) &&
-          new Date(String(school.subscription_expires_at)).getTime() < Date.now() &&
-          school.status === "ACTIVE")),
+        school.status === "DELETED_PENDING_PURGE"),
     lockReason: (() => {
       const st = school.status;
       const reason = (school as { status_reason?: string | null }).status_reason;
@@ -244,12 +241,33 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
       if (st === "PAUSED" || st === "SUSPENDED")
         return reason || "Account paused by the system owner.";
       if (st === "CANCELLED") return reason || "Account cancelled.";
-      if (
-        school.subscription_expires_at &&
-        new Date(String(school.subscription_expires_at)).getTime() < Date.now() &&
-        st === "ACTIVE"
-      )
-        return "Subscription expired — renew under Billing.";
+      if (st === "GRACE_PERIOD") {
+        const ge = (school as { grace_ends_at?: string | null }).grace_ends_at;
+        return (
+          reason ||
+          (ge
+            ? `Subscription ended — account will pause after ${String(ge).slice(0, 10)} unless renewed.`
+            : "Subscription ended — 15-day notice period. Renew under Billing.")
+        );
+      }
+      return null;
+    })(),
+    subscriptionWarning: (() => {
+      const st = school.status;
+      const exp = school.subscription_expires_at
+        ? new Date(String(school.subscription_expires_at)).getTime()
+        : null;
+      if (st === "GRACE_PERIOD") {
+        const ge = (school as { grace_ends_at?: string | null }).grace_ends_at;
+        return ge
+          ? `Renew by ${String(ge).slice(0, 10)} or the account will pause.`
+          : "Subscription in notice period — renew under Billing.";
+      }
+      if (exp && st === "ACTIVE") {
+        const days = Math.ceil((exp - Date.now()) / (24 * 60 * 60 * 1000));
+        if (days <= 15 && days >= 0)
+          return `Subscription ends in ${days} day(s) (${String(school.subscription_expires_at).slice(0, 10)}).`;
+      }
       return null;
     })(),
     schools,
@@ -2797,6 +2815,7 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
     }
 
     const defaultPeriod = (data.period || "monthly") as BillingPeriod;
+    const priceMatrix = await loadSubscriptionPrices(sql);
     const schools = await sql<School>`
       select * from schools where status in ('ACTIVE','GRACE_PERIOD','PENDING_PAYMENT')
     `;
@@ -2817,7 +2836,9 @@ export const generatePlatformInvoices = createServerFn({ method: "POST" })
       const period =
         ((school as { billing_period?: string }).billing_period as BillingPeriod) ||
         defaultPeriod;
-      const amount = priceFor(tier, period);
+      const amount =
+        priceMatrix[tier]?.[period] ??
+        priceFor(tier, period);
       const bounds = periodBounds(period);
       const start = toDateStr(bounds.start);
       const end = toDateStr(bounds.end);
@@ -5895,14 +5916,7 @@ export async function assertSchoolNotLocked(userId: string, schoolId: string) {
       reason || "This school account is closed. Contact the system owner.",
     );
   }
-  if (row.subscription_expires_at) {
-    const exp = new Date(row.subscription_expires_at).getTime();
-    if (exp < Date.now() && st === "ACTIVE") {
-      throw new Error(
-        "Subscription has expired. Renew under Billing to continue operations.",
-      );
-    }
-  }
+  // ACTIVE with past subscription_expires_at stays usable until cron moves to GRACE then PAUSED after 15 days
 }
 
 
@@ -8818,3 +8832,202 @@ export const grantSchoolAccessPeriod = createServerFn({ method: "POST" })
       reason,
     };
   });
+
+
+/** Platform subscription price matrix (editable). Falls back to code defaults. */
+export async function loadSubscriptionPrices(sql: Awaited<ReturnType<typeof getSql>>) {
+  const { SUBSCRIPTION_PRICES } = await import("./billing");
+  try {
+    const rows = await sql<{ value: string }>`
+      select value from platform_settings where key = 'subscription_prices' limit 1
+    `;
+    if (rows[0]?.value) {
+      const parsed = JSON.parse(rows[0].value);
+      return { ...SUBSCRIPTION_PRICES, ...parsed } as typeof SUBSCRIPTION_PRICES;
+    }
+  } catch {
+    /* ignore */
+  }
+  return SUBSCRIPTION_PRICES;
+}
+
+export const getPlatformPriceList = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const prices = await loadSubscriptionPrices(sql);
+    return { prices };
+  });
+
+export const savePlatformPriceList = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { prices: Record<string, Record<string, number>> }) => data)
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    await sql.query(
+      `insert into platform_settings (key, value, updated_at, updated_by)
+       values ('subscription_prices', $1, now(), $2)
+       on conflict (key) do update set value = $1, updated_at = now(), updated_by = $2`,
+      [JSON.stringify(data.prices), context.userId],
+    );
+    return { ok: true };
+  });
+
+/**
+ * Cron: subscription lifecycle
+ * - 15 days before end: email platform owner + school (warning)
+ * - After end: ACTIVE → GRACE_PERIOD for 15 days (still usable), email both
+ * - After grace: → PAUSED with reason
+ */
+export async function processSubscriptionLifecycle(): Promise<{
+  warned: number;
+  enteredGrace: number;
+  paused: number;
+}> {
+  const sql = await getSql();
+  const { sendEmail } = await import("./email");
+  let warned = 0;
+  let enteredGrace = 0;
+  let paused = 0;
+
+  try {
+    await sql.query(`alter table schools add column if not exists status_reason text`);
+  } catch {
+    /* ignore */
+  }
+
+  const platformEmail =
+    process.env.PLATFORM_ALERT_EMAIL ||
+    process.env.EMAIL_FROM?.match(/<([^>]+)>/)?.[1] ||
+    process.env.EMAIL_FROM ||
+    "";
+
+  // Enter grace: expired ACTIVE
+  const toGrace = await sql<{
+    id: string;
+    name: string;
+    owner_email: string | null;
+    billing_contact_email: string | null;
+    subscription_expires_at: string;
+  }>`
+    select id, name, owner_email, billing_contact_email, subscription_expires_at::text
+    from schools
+    where status = 'ACTIVE'
+      and subscription_expires_at is not null
+      and subscription_expires_at < now()
+  `;
+  for (const s of toGrace) {
+    await sql.query(
+      `update schools set
+         status = 'GRACE_PERIOD',
+         grace_ends_at = now() + interval '15 days',
+         status_reason = $1
+       where id = $2`,
+      [
+        "Subscription period ended — 15 days to renew before pause",
+        s.id,
+      ],
+    );
+    const body = `School "${s.name}" subscription ended on ${String(s.subscription_expires_at).slice(0, 10)}. The account stays open for 15 days. If unpaid, it will pause automatically.`;
+    for (const to of [
+      s.owner_email,
+      s.billing_contact_email,
+      platformEmail,
+    ].filter(Boolean) as string[]) {
+      try {
+        await sendEmail({
+          to,
+          subject: `NEXUS: ${s.name} — 15-day renewal notice`,
+          text: body,
+          html: `<p>${body}</p>`,
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    enteredGrace++;
+  }
+
+  // Pause after grace
+  const toPause = await sql<{
+    id: string;
+    name: string;
+    owner_email: string | null;
+    billing_contact_email: string | null;
+  }>`
+    select id, name, owner_email, billing_contact_email
+    from schools
+    where status = 'GRACE_PERIOD'
+      and grace_ends_at is not null
+      and grace_ends_at < now()
+  `;
+  for (const s of toPause) {
+    await sql.query(
+      `update schools set
+         status = 'PAUSED',
+         status_reason = $1
+       where id = $2`,
+      ["Subscription not renewed after 15-day notice period", s.id],
+    );
+    const body = `School "${s.name}" has been paused after the 15-day notice period. Pay or ask the system owner to grant access / resume.`;
+    for (const to of [
+      s.owner_email,
+      s.billing_contact_email,
+      platformEmail,
+    ].filter(Boolean) as string[]) {
+      try {
+        await sendEmail({
+          to,
+          subject: `NEXUS: ${s.name} paused — subscription unpaid`,
+          text: body,
+          html: `<p>${body}</p>`,
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    paused++;
+  }
+
+  // Warn 15 days before expiry (ACTIVE only)
+  const soon = await sql<{
+    id: string;
+    name: string;
+    owner_email: string | null;
+    billing_contact_email: string | null;
+    subscription_expires_at: string;
+  }>`
+    select id, name, owner_email, billing_contact_email, subscription_expires_at::text
+    from schools
+    where status = 'ACTIVE'
+      and subscription_expires_at is not null
+      and subscription_expires_at > now()
+      and subscription_expires_at <= now() + interval '15 days'
+  `;
+  for (const s of soon) {
+    const body = `Reminder: "${s.name}" subscription ends on ${String(s.subscription_expires_at).slice(0, 10)}. After that date a 15-day notice period starts, then the account pauses if unpaid.`;
+    for (const to of [
+      s.owner_email,
+      s.billing_contact_email,
+      platformEmail,
+    ].filter(Boolean) as string[]) {
+      try {
+        await sendEmail({
+          to,
+          subject: `NEXUS: ${s.name} — subscription ending soon`,
+          text: body,
+          html: `<p>${body}</p>`,
+        });
+        warned++;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  return { warned, enteredGrace, paused };
+}

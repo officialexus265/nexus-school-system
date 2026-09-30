@@ -380,6 +380,7 @@ export type CalendarEvent = {
 export type Snapshot = {
   isPlatformOwner: boolean;
   lockReason?: string | null;
+  subscriptionWarning?: string | null;
   /** owner | teacher | head | bursar | ... */
   membershipRole?: string;
   schoolLocked?: boolean;

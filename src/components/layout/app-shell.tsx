@@ -154,6 +154,9 @@ export function AppShell() {
       : null;
   const schoolLocked = Boolean(snap.data?.schoolLocked);
   const lockReason = (snap.data as { lockReason?: string | null } | undefined)?.lockReason;
+  const subscriptionWarning = (snap.data as { subscriptionWarning?: string | null } | undefined)
+    ?.subscriptionWarning;
+
 
   const setSchoolSlug = useNexusSession((s) => s.setSchoolSlug);
   const schools = snap.data?.schools || [];
@@ -317,6 +320,14 @@ export function AppShell() {
               {" "}
               <a href="/app/settings" className="underline font-medium">
                 Open Billing / Settings
+              </a>
+            </div>
+          )}
+          {!schoolLocked && subscriptionWarning && !isPlatform && (
+            <div className="border-b border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm">
+              <strong>Subscription notice.</strong> {subscriptionWarning}{" "}
+              <a href="/app/settings" className="underline font-medium">
+                Billing
               </a>
             </div>
           )}
