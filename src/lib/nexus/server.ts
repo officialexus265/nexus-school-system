@@ -6339,6 +6339,9 @@ export const updatePlatformSettings = createServerFn({ method: "POST" })
     if (data.supportEmail !== undefined) {
       pairs.push(["support_email", data.supportEmail.trim()]);
     }
+    if (data.googleOauthTestUsersUrl !== undefined) {
+      pairs.push(["google_oauth_test_users_url", data.googleOauthTestUsersUrl.trim()]);
+    }
     for (const [key, value] of pairs) {
       await sql.query(
         `insert into platform_settings (key, value, updated_at, updated_by)

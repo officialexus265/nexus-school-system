@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { StatusPill } from "@/components/status-pill";
@@ -35,6 +35,7 @@ function PeoplePage() {
   const [relationship, setRelationship] = useState("Guardian");
   const [notifyChannel, setNotifyChannel] = useState<"sms" | "email" | "both">("sms");
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const [studentSearch, setStudentSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [verifications, setVerifications] = useState<
     {
@@ -193,33 +194,108 @@ function PeoplePage() {
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label>Link to students *</Label>
-              <div className="max-h-48 overflow-y-auto rounded-lg border border-border p-2">
-                <div className="grid gap-1 sm:grid-cols-2">
-                  {snap.students.map((st) => {
-                    const cls = classById(snap, st.class_id);
-                    return (
-                      <label
-                        key={st.id}
-                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+              <p className="text-xs text-muted-foreground">
+                Search by name or admission number. Tick several at once (e.g. all “Banda” siblings).
+              </p>
+              <Input
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                placeholder="Search students… e.g. Banda"
+                className="mb-1"
+              />
+              {(() => {
+                const q = studentSearch.trim().toLowerCase();
+                const filtered = !q
+                  ? snap.students
+                  : snap.students.filter((st) => {
+                      const name = studentName(st).toLowerCase();
+                      const adm = (st.admission_number || "").toLowerCase();
+                      const last = (st.last_name || "").toLowerCase();
+                      const first = (st.first_name || "").toLowerCase();
+                      return (
+                        name.includes(q) ||
+                        adm.includes(q) ||
+                        last.includes(q) ||
+                        first.includes(q)
+                      );
+                    });
+                const filteredIds = filtered.map((s) => s.id);
+                const allFilteredSelected =
+                  filteredIds.length > 0 &&
+                  filteredIds.every((id) => selectedStudents.includes(id));
+                return (
+                  <>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!filteredIds.length}
+                        onClick={() => {
+                          if (allFilteredSelected) {
+                            setSelectedStudents((prev) =>
+                              prev.filter((id) => !filteredIds.includes(id)),
+                            );
+                          } else {
+                            setSelectedStudents((prev) => [
+                              ...new Set([...prev, ...filteredIds]),
+                            ]);
+                          }
+                        }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedStudents.includes(st.id)}
-                          onChange={() => toggleStudent(st.id)}
-                          className="size-4 accent-primary"
-                        />
-                        <span>
-                          {studentName(st)}
-                          <span className="text-muted-foreground">
-                            {" "}
-                            · {classLabel(cls)} · {st.admission_number}
-                          </span>
+                        {allFilteredSelected
+                          ? `Unselect all shown (${filteredIds.length})`
+                          : `Select all shown (${filteredIds.length})`}
+                      </Button>
+                      {selectedStudents.length > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          {selectedStudents.length} selected
+                          <button
+                            type="button"
+                            className="ml-2 underline"
+                            onClick={() => setSelectedStudents([])}
+                          >
+                            Clear
+                          </button>
                         </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
+                      )}
+                    </div>
+                    <div className="max-h-56 overflow-y-auto rounded-lg border border-border p-2">
+                      {filtered.length === 0 ? (
+                        <p className="px-2 py-3 text-sm text-muted-foreground">
+                          No students match “{studentSearch}”.
+                        </p>
+                      ) : (
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          {filtered.map((st) => {
+                            const cls = classById(snap, st.class_id);
+                            return (
+                              <label
+                                key={st.id}
+                                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedStudents.includes(st.id)}
+                                  onChange={() => toggleStudent(st.id)}
+                                  className="size-4 accent-primary"
+                                />
+                                <span>
+                                  {studentName(st)}
+                                  <span className="text-muted-foreground">
+                                    {" "}
+                                    · {classLabel(cls)} · {st.admission_number}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={busy}>

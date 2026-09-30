@@ -73,6 +73,9 @@ function PlatformPage() {
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
 
   const [contactPhoneDisplay, setContactPhoneDisplay] = useState("0980697476");
+  const [googleOauthTestUsersUrl, setGoogleOauthTestUsersUrl] = useState(
+    "https://console.cloud.google.com/auth/audience?project=nsms-510209",
+  );
   const [contactPhoneE164, setContactPhoneE164] = useState("+265980697476");
   const [contactWhatsapp, setContactWhatsapp] = useState("265980697476");
   const [contactLabel, setContactLabel] = useState("system owner");
@@ -102,6 +105,8 @@ function PlatformPage() {
         if (s.contact_whatsapp) setContactWhatsapp(s.contact_whatsapp);
         if (s.contact_label) setContactLabel(s.contact_label);
         if (s.support_email) setSupportEmail(s.support_email);
+        if (s.google_oauth_test_users_url)
+          setGoogleOauthTestUsersUrl(s.google_oauth_test_users_url);
       })
       .catch(() => {});
   }, [isPlatform]);
@@ -664,6 +669,48 @@ function PlatformPage() {
                     placeholder="owner@school.ac.mw"
                   />
                 </div>
+                <div className="sm:col-span-2 rounded-lg border border-border bg-secondary/40 p-3 space-y-2">
+                  <p className="text-sm font-medium">Gmail Connect (Testing mode)</p>
+                  <p className="text-xs text-muted-foreground">
+                    While Google OAuth is in Testing, add the owner&apos;s Gmail under Test users
+                    before they can Connect Gmail. Copy the email, open Google Console, paste as a
+                    test user (limit ~100).
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!ownerEmail.trim()}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(ownerEmail.trim());
+                          toast.success("Owner email copied");
+                        } catch {
+                          window.prompt("Copy owner email:", ownerEmail.trim());
+                        }
+                      }}
+                    >
+                      Copy owner email
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        window.open(
+                          googleOauthTestUsersUrl ||
+                            "https://console.cloud.google.com/auth/audience?project=nsms-510209",
+                          "_blank",
+                          "noopener,noreferrer",
+                        );
+                      }}
+                    >
+                      Open Google test users
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="space-y-1.5">
                   <Label>School package (sections)</Label>
                   <select
@@ -820,6 +867,7 @@ function PlatformPage() {
                       contactWhatsapp,
                       contactLabel,
                       supportEmail,
+                      googleOauthTestUsersUrl,
                     },
                   });
                   toast.success("Login contact settings saved");
