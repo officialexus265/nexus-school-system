@@ -405,11 +405,6 @@ function PeoplePage() {
             </table>
           </div>
         </TabsContent>
-
-      {/* Parent self-link is OTP-based in the parent app — no school approval required. */}
-</ul>
-        </section>
-      )}
       </Tabs>
     </div>
   );
