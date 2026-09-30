@@ -143,3 +143,37 @@ export function periodBounds(
 export function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
+
+
+/** Fixed calendar: 1 month | 1 term = 4 months | 1 year = 12 months (3 terms). */
+export const PERIOD_MONTHS: Record<BillingPeriod, number> = {
+  monthly: 1,
+  term: 4,
+  annual: 12,
+};
+
+export function periodMonths(period: BillingPeriod): number {
+  return PERIOD_MONTHS[period] ?? 1;
+}
+
+/**
+ * Upgrade: credit unused value of current plan toward a longer/higher plan.
+ * Example: paid term 4, upgrade to year 10 → pay max(0, 10 - 4) = 6.
+ * Uses list prices (same tier).
+ */
+export function upgradePrice(
+  tier: BillingTier,
+  fromPeriod: BillingPeriod,
+  toPeriod: BillingPeriod,
+): { amountDue: number; credit: number; targetPrice: number } {
+  const from = priceFor(tier, fromPeriod);
+  const to = priceFor(tier, toPeriod);
+  const credit = from; // full list price of current package as credit when upgrading mid-cycle
+  const amountDue = Math.max(0, to - credit);
+  return { amountDue, credit, targetPrice: to };
+}
+
+/** Extend: pay full price of the additional period (stacked on current end date). */
+export function extendPrice(tier: BillingTier, period: BillingPeriod): number {
+  return priceFor(tier, period);
+}

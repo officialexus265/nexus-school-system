@@ -21,6 +21,7 @@ import {
   updatePlatformSettings,
   updateSchoolAccountRequest,
   wipeAllSchools,
+  updateSchoolByPlatform,
 } from "@/lib/nexus/server";
 import {
   BILLING_TIER_OPTIONS,
@@ -57,6 +58,18 @@ function PlatformPage() {
 
   const [platformTab, setPlatformTab] = useState("schools");
   const [showCreate, setShowCreate] = useState(false);
+  const [schoolStatusTab, setSchoolStatusTab] = useState<
+    "all" | "active" | "pending" | "paused" | "balance" | "deleted"
+  >("all");
+  const [editSchool, setEditSchool] = useState<{
+    id: string;
+    name: string;
+    city: string;
+    area: string;
+    ownerName: string;
+    ownerEmail: string;
+  } | null>(null);
+
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
 
   const [schoolName, setSchoolName] = useState("");
@@ -170,6 +183,25 @@ function PlatformPage() {
   if (!q.data) return null;
 
   const filteredSchools = schools.filter((s) => {
+    const st = (s.status || "").toUpperCase();
+    if (schoolStatusTab === "active" && !(st === "ACTIVE" || st === "TRIAL")) return false;
+    if (
+      schoolStatusTab === "pending" &&
+      !(st === "PENDING_PAYMENT" || st === "PENDING" || st === "GRACE_PERIOD")
+    )
+      return false;
+    if (
+      schoolStatusTab === "paused" &&
+      !(st === "PAUSED" || st === "SUSPENDED" || st === "CANCELLED")
+    )
+      return false;
+    if (schoolStatusTab === "deleted" && st !== "DELETED_PENDING_PURGE") return false;
+    if (
+      schoolStatusTab === "balance" &&
+      !(st === "PENDING_PAYMENT" || st === "GRACE_PERIOD")
+    )
+      return false;
+
     const term = schoolSearch.trim().toLowerCase();
     if (!term) return true;
     const blob = [
@@ -213,6 +245,13 @@ function PlatformPage() {
                 )
                   return;
                 try {
+                  const typed = window.prompt(
+                    'Type DELETE ALL SCHOOLS to confirm. This cannot be undone.',
+                  );
+                  if (typed !== "DELETE ALL SCHOOLS") {
+                    toast.message("Wipe cancelled");
+                    return;
+                  }
                   const r = await wipeAllSchools();
                   toast.success(`Removed ${r.deleted} school(s)`);
                   await invalidate();
@@ -295,6 +334,33 @@ function PlatformPage() {
                   value={schoolSearch}
                   onChange={(e) => setSchoolSearch(e.target.value)}
                 />
+
+            <div className="mt-3 flex flex-wrap gap-1">
+              {(
+                [
+                  ["all", "All"],
+                  ["active", "Active"],
+                  ["pending", "Pending / unpaid"],
+                  ["balance", "Balances due"],
+                  ["paused", "Paused / suspended"],
+                  ["deleted", "Deleted (grace)"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSchoolStatusTab(id)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${
+                    schoolStatusTab === id
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
                 <Button
                   type="button"
                   variant="outline"
@@ -441,6 +507,78 @@ function PlatformPage() {
                                           }}
                                         >
                                           Resend invite
+                                        </Button>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                          setEditSchool({
+                                            id: s.id,
+                                            name: s.name,
+                                            city: s.city || "",
+                                            area: (s as { area?: string }).area || "",
+                                            ownerName: s.owner_name || "",
+                                            ownerEmail: s.owner_email || "",
+                                          });
+                                        }}
+                                      >
+                                        Edit
+                                      </Button>
+                                      {s.status !== "PAUSED" && s.status !== "SUSPENDED" && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-amber-700"
+                                          onClick={async () => {
+                                            const reason = window.prompt(
+                                              "Pause reason (shown to school staff):",
+                                              "Subscription fee not paid",
+                                            );
+                                            if (!reason?.trim()) return;
+                                            try {
+                                              await transitionSchoolStatus({
+                                                data: {
+                                                  schoolId: s.id,
+                                                  toStatus: "PAUSED" as never,
+                                                  reason: reason.trim(),
+                                                },
+                                              });
+                                              toast.success("School paused");
+                                              await invalidate();
+                                            } catch (e) {
+                                              toast.error(
+                                                e instanceof Error ? e.message : "Failed",
+                                              );
+                                            }
+                                          }}
+                                        >
+                                          Pause
+                                        </Button>
+                                      )}
+                                      {(s.status === "PAUSED" || s.status === "SUSPENDED") && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={async () => {
+                                            try {
+                                              await transitionSchoolStatus({
+                                                data: {
+                                                  schoolId: s.id,
+                                                  toStatus: "ACTIVE" as never,
+                                                  reason: "",
+                                                },
+                                              });
+                                              toast.success("School reactivated");
+                                              await invalidate();
+                                            } catch (e) {
+                                              toast.error(
+                                                e instanceof Error ? e.message : "Failed",
+                                              );
+                                            }
+                                          }}
+                                        >
+                                          Resume
                                         </Button>
                                       )}
                                       {s.status !== "DELETED_PENDING_PURGE" && (
@@ -881,6 +1019,84 @@ function PlatformPage() {
           </section>
         </TabsContent>
       </Tabs>
+
+      {editSchool && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl bg-card p-5 shadow-lg">
+            <h3 className="font-display text-lg">Edit school</h3>
+            <div className="mt-3 space-y-3">
+              <div className="space-y-1">
+                <Label>Name</Label>
+                <Input
+                  value={editSchool.name}
+                  onChange={(e) => setEditSchool({ ...editSchool, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>City</Label>
+                <Input
+                  value={editSchool.city}
+                  onChange={(e) => setEditSchool({ ...editSchool, city: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Area</Label>
+                <Input
+                  value={editSchool.area}
+                  onChange={(e) => setEditSchool({ ...editSchool, area: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Owner name</Label>
+                <Input
+                  value={editSchool.ownerName}
+                  onChange={(e) =>
+                    setEditSchool({ ...editSchool, ownerName: e.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Owner email</Label>
+                <Input
+                  value={editSchool.ownerEmail}
+                  onChange={(e) =>
+                    setEditSchool({ ...editSchool, ownerEmail: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditSchool(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await updateSchoolByPlatform({
+                      data: {
+                        schoolId: editSchool.id,
+                        name: editSchool.name,
+                        city: editSchool.city,
+                        area: editSchool.area,
+                        ownerName: editSchool.ownerName,
+                        ownerEmail: editSchool.ownerEmail,
+                      },
+                    });
+                    toast.success("School updated");
+                    setEditSchool(null);
+                    await invalidate();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Update failed");
+                  }
+                }}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

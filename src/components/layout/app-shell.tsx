@@ -153,6 +153,8 @@ export function AppShell() {
       ? snap.data.school.name
       : null;
   const schoolLocked = Boolean(snap.data?.schoolLocked);
+  const lockReason = (snap.data as { lockReason?: string | null } | undefined)?.lockReason;
+
   const setSchoolSlug = useNexusSession((s) => s.setSchoolSlug);
   const schools = snap.data?.schools || [];
   const role = (snap.data?.membershipRole || "owner").toLowerCase();
@@ -308,6 +310,16 @@ export function AppShell() {
           </div>
         )}
         <main className="flex-1 overflow-auto p-4 md:p-6">
+          {schoolLocked && !isPlatform && (
+            <div className="border-b border-amber-500/40 bg-amber-500/15 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
+              <strong>Operations limited.</strong>{" "}
+              {lockReason || "This school cannot process changes until the account is active."}
+              {" "}
+              <a href="/app/settings" className="underline font-medium">
+                Open Billing / Settings
+              </a>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

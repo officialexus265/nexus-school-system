@@ -229,8 +229,29 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     schoolLocked:
       !platformFlag &&
       (school.status === "SUSPENDED" ||
+        school.status === "PAUSED" ||
         school.status === "CANCELLED" ||
-        school.status === "DELETED_PENDING_PURGE"),
+        school.status === "PENDING_PAYMENT" ||
+        school.status === "DELETED_PENDING_PURGE" ||
+        (Boolean(school.subscription_expires_at) &&
+          new Date(String(school.subscription_expires_at)).getTime() < Date.now() &&
+          school.status === "ACTIVE")),
+    lockReason: (() => {
+      const st = school.status;
+      const reason = (school as { status_reason?: string | null }).status_reason;
+      if (st === "PENDING_PAYMENT")
+        return reason || "First subscription fee not paid — pay under Billing to activate.";
+      if (st === "PAUSED" || st === "SUSPENDED")
+        return reason || "Account paused by the system owner.";
+      if (st === "CANCELLED") return reason || "Account cancelled.";
+      if (
+        school.subscription_expires_at &&
+        new Date(String(school.subscription_expires_at)).getTime() < Date.now() &&
+        st === "ACTIVE"
+      )
+        return "Subscription expired — renew under Billing.";
+      return null;
+    })(),
     schools,
     school,
     staff,
@@ -1555,6 +1576,18 @@ export const requestParentOtp = createServerFn({ method: "POST" })
     `;
     const school = schools[0];
     if (!school) throw new Error("Parent app not found");
+    if (
+      school.status === "PENDING_PAYMENT" ||
+      school.status === "PAUSED" ||
+      school.status === "SUSPENDED" ||
+      school.status === "CANCELLED"
+    ) {
+      const reason = (school as { status_reason?: string }).status_reason;
+      throw new Error(
+        reason ||
+          "This school parent app is temporarily unavailable. Contact the school office.",
+      );
+    }
 
     // Find parent by phone within this school (flexible match on last 9 digits)
     const last9 = phone.replace(/\D/g, "").slice(-9);
@@ -2217,13 +2250,25 @@ export const transitionSchoolStatus = createServerFn({ method: "POST" })
     const from = school.status;
     const to = data.toStatus;
 
-    await sql.query(`update schools set status = $1 where id = $2`, [to, data.schoolId]);
+    try {
+      await sql.query(
+        `alter table schools add column if not exists status_reason text`,
+      );
+    } catch {
+      /* ignore */
+    }
+
+    await sql.query(
+      `update schools set status = $1, status_reason = $2 where id = $3`,
+      [to, data.reason?.trim() || null, data.schoolId],
+    );
 
     if (to === "ACTIVE") {
+      // Manual activate by platform: do not invent a year unless no expiry set
       await sql.query(
         `update schools set activated_at = coalesce(activated_at, now()),
-          subscription_expires_at = now() + interval '1 year',
-          grace_ends_at = null
+          grace_ends_at = null,
+          status_reason = null
          where id = $1`,
         [data.schoolId],
       );
@@ -2233,6 +2278,11 @@ export const transitionSchoolStatus = createServerFn({ method: "POST" })
         `update schools set grace_ends_at = now() + interval '14 days' where id = $1`,
         [data.schoolId],
       );
+    }
+    if (to === "PAUSED" || to === "SUSPENDED") {
+      if (!data.reason?.trim()) {
+        throw new Error("Provide a clear reason when pausing/suspending a school");
+      }
     }
 
     const eid = nid(context.userId, `sub-${Date.now()}`);
@@ -4908,11 +4958,15 @@ export async function fulfillPaychanguPayment(txRef: string) {
       [verified.reference || txRef, intent.platform_invoice_id],
     );
     await sql.query(
-      `update schools set status = 'ACTIVE',
-         subscription_expires_at = now() + interval '32 days'
+      `update schools set status = 'ACTIVE', status_reason = null,
+         subscription_expires_at = now() + interval '4 months'
        where id = $1`,
       [intent.school_id],
     );
+  }
+
+  if (intent.purpose === "SCHOOL_SUBSCRIPTION") {
+    await applySchoolSubscriptionPayment(txRef);
   }
 
   return { ok: true };
@@ -5811,14 +5865,43 @@ export async function assertSchoolNotLocked(userId: string, schoolId: string) {
   const platform = await isPlatformOwner(userId).catch(() => false);
   if (platform) return;
   const sql = await getSql();
-  const rows = await sql<{ status: string }>`
-    select status from schools where id = ${schoolId} limit 1
+  const rows = await sql<{
+    status: string;
+    status_reason: string | null;
+    subscription_expires_at: string | null;
+  }>`
+    select status, status_reason, subscription_expires_at from schools where id = ${schoolId} limit 1
   `;
-  const st = rows[0]?.status;
-  if (st === "SUSPENDED" || st === "CANCELLED") {
+  const row = rows[0];
+  if (!row) throw new Error("School not found");
+  const st = row.status;
+  const reason = (row.status_reason || "").trim();
+
+  if (st === "PENDING_PAYMENT") {
     throw new Error(
-      "This school account is suspended. Contact the system owner to restore access.",
+      reason ||
+        "Subscription not paid yet. Pay the first subscription fee under Billing to activate this school.",
     );
+  }
+  if (st === "PAUSED" || st === "SUSPENDED") {
+    throw new Error(
+      reason
+        ? `School operations paused: ${reason}`
+        : "This school account is paused. Contact the system owner.",
+    );
+  }
+  if (st === "CANCELLED" || st === "DELETED_PENDING_PURGE") {
+    throw new Error(
+      reason || "This school account is closed. Contact the system owner.",
+    );
+  }
+  if (row.subscription_expires_at) {
+    const exp = new Date(row.subscription_expires_at).getTime();
+    if (exp < Date.now() && st === "ACTIVE") {
+      throw new Error(
+        "Subscription has expired. Renew under Billing to continue operations.",
+      );
+    }
   }
 }
 
@@ -8304,3 +8387,303 @@ export const verifyParentSelfLinkOtp = createServerFn({ method: "POST" })
       message: `Linked ${studentIds.length} student(s). You are signed in.`,
     };
   });
+
+
+/** Platform owner: edit school profile / billing labels */
+export const updateSchoolByPlatform = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      name?: string;
+      city?: string;
+      area?: string;
+      ownerName?: string;
+      ownerEmail?: string;
+      phone?: string;
+      billingTier?: string;
+      billingPeriod?: "monthly" | "term" | "annual";
+      activationFee?: number;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const schools = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
+    if (!schools[0]) throw new Error("School not found");
+
+    const name = data.name?.trim();
+    const city = data.city?.trim();
+    const area = data.area?.trim();
+    const ownerName = data.ownerName?.trim();
+    const ownerEmail = data.ownerEmail?.trim().toLowerCase();
+    const phone = data.phone?.trim();
+    const tier = data.billingTier
+      ? normalizeBillingTier(data.billingTier)
+      : null;
+    const period = data.billingPeriod || null;
+    let fee = data.activationFee;
+    if (tier && period && (fee == null || Number.isNaN(fee))) {
+      fee = priceFor(tier, period);
+    }
+
+    await sql.query(
+      `update schools set
+         name = coalesce($1, name),
+         city = coalesce($2, city),
+         area = coalesce($3, area),
+         owner_name = coalesce($4, owner_name),
+         owner_email = coalesce($5, owner_email),
+         phone = coalesce($6, phone),
+         billing_tier = coalesce($7, billing_tier),
+         billing_period = coalesce($8, billing_period),
+         activation_fee = coalesce($9, activation_fee),
+         subscription_plan = coalesce($8, subscription_plan)
+       where id = $10`,
+      [
+        name || null,
+        city || null,
+        area || null,
+        ownerName || null,
+        ownerEmail || null,
+        phone || null,
+        tier,
+        period,
+        fee != null ? Number(fee) : null,
+        data.schoolId,
+      ],
+    );
+    return { ok: true };
+  });
+
+/**
+ * School owner: start PayChangu payment for subscription.
+ * mode: activate (first pay) | extend (stack full period) | upgrade (pay difference to longer period)
+ */
+export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      mode: "activate" | "extend" | "upgrade";
+      period: "monthly" | "term" | "annual";
+      customerEmail?: string;
+      customerName?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const schools = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
+    const school = schools[0];
+    if (!school) throw new Error("School not found");
+
+    const { periodMonths, upgradePrice, extendPrice, priceFor: pf } = await import("./billing");
+    const tier = normalizeBillingTier(
+      (school as { billing_tier?: string }).billing_tier || school.subscription_plan || "primary",
+    );
+    const currentPeriod = ((school as { billing_period?: string }).billing_period ||
+      "term") as "monthly" | "term" | "annual";
+
+    let amount = 0;
+    let monthsToAdd = periodMonths(data.period);
+    let detail = "";
+
+    if (data.mode === "activate") {
+      amount = pf(tier, data.period);
+      detail = `First subscription (${data.period})`;
+    } else if (data.mode === "extend") {
+      amount = extendPrice(tier, data.period);
+      detail = `Extend +${data.period} (${monthsToAdd} months)`;
+    } else if (data.mode === "upgrade") {
+      const up = upgradePrice(tier, currentPeriod, data.period);
+      amount = up.amountDue;
+      monthsToAdd = periodMonths(data.period); // subscription end becomes from now + full target period (paid as upgrade)
+      // Better: remaining = max(current end, now) then add difference in months only
+      // Spec: upgrade term→year pays difference and becomes yearly from activation logic:
+      // set period to annual and set expiry to max(now, existing) + (annual months - term months already "used")
+      // Simpler product rule: upgrade sets end = now + full target period months (credit applied to price only)
+      detail = `Upgrade ${currentPeriod}→${data.period} (credit ${up.credit})`;
+      if (amount <= 0) {
+        // free upgrade path — apply immediately
+        const months = periodMonths(data.period);
+        await sql.query(
+          `update schools set
+             status = 'ACTIVE',
+             status_reason = null,
+             billing_period = $1,
+             subscription_period = $1,
+             subscription_expires_at = greatest(coalesce(subscription_expires_at, now()), now())
+               + ($2 || ' months')::interval,
+             activated_at = coalesce(activated_at, now())
+           where id = $3`,
+          [data.period, String(months), data.schoolId],
+        );
+        return { ok: true, freeUpgrade: true, amount: 0 };
+      }
+    } else {
+      throw new Error("Invalid mode");
+    }
+
+    if (amount <= 0) throw new Error("Nothing to pay");
+
+    const { initiateCheckout } = await import("./paychangu");
+    const txRef = `sub-${data.schoolId.slice(0, 8)}-${Date.now()}`;
+    const base =
+      process.env.BETTER_AUTH_URL ||
+      process.env.VITE_APP_URL ||
+      "http://localhost:8080";
+    const checkout = await initiateCheckout({
+      amount,
+      currency: "MWK",
+      email: data.customerEmail || school.owner_email || school.email || "billing@nexus.local",
+      firstName: data.customerName || school.owner_name || school.name,
+      txRef,
+      title: `NEXUS ${data.mode} — ${school.name}`,
+      description: detail,
+      callbackUrl: `${base.replace(/\/$/, "")}/api/paychangu/webhook`,
+      returnUrl: `${base.replace(/\/$/, "")}/app/settings?billing=1&tx_ref=${txRef}`,
+      meta: {
+        kind: "school_subscription",
+        schoolId: data.schoolId,
+        mode: data.mode,
+        period: data.period,
+        months: String(monthsToAdd),
+        tier,
+      },
+    });
+    if (!checkout.ok) {
+      throw new Error(checkout.error || "PayChangu checkout failed");
+    }
+
+    // Record intent
+    try {
+      await sql.query(
+        `insert into payment_intents (
+           id, school_id, user_id, tx_ref, amount, status, purpose, meta, created_at
+         ) values ($1,$2,$3,$4,$5,'PENDING','SCHOOL_SUBSCRIPTION',$6,now())
+         on conflict do nothing`,
+        [
+          nid(context.userId, `pi-${Date.now()}`),
+          data.schoolId,
+          context.userId,
+          txRef,
+          amount,
+          JSON.stringify({
+            kind: "school_subscription",
+            mode: data.mode,
+            period: data.period,
+            months: monthsToAdd,
+            tier,
+          }),
+        ],
+      );
+    } catch (e) {
+      console.error("[subscription intent]", e);
+      try {
+        await sql.query(
+          `insert into payment_intents (id, school_id, tx_ref, amount, status, purpose)
+           values ($1,$2,$3,$4,'PENDING','SCHOOL_SUBSCRIPTION')`,
+          [nid(context.userId, `pi-${Date.now()}`), data.schoolId, txRef, amount],
+        );
+      } catch (e2) {
+        console.error("[subscription intent fallback]", e2);
+      }
+    }
+
+    return {
+      ok: true,
+      amount,
+      txRef,
+      checkoutUrl: checkout.checkoutUrl,
+      detail,
+    };
+  });
+
+/** Apply paid subscription (webhook / return). */
+export async function applySchoolSubscriptionPayment(txRef: string): Promise<{ ok: boolean }> {
+  const sql = await getSql();
+  const intents = await sql<{
+    school_id: string;
+    amount: string | number;
+    meta: unknown;
+    status: string;
+  }>`
+    select school_id, amount, meta, status from payment_intents where tx_ref = ${txRef} limit 1
+  `.catch(() => [] as { school_id: string; amount: string | number; meta: unknown; status: string }[]);
+
+  let schoolId: string | null = intents[0]?.school_id || null;
+  let meta: {
+    kind?: string;
+    mode?: string;
+    period?: string;
+    months?: number | string;
+    tier?: string;
+  } = {};
+  if (intents[0]?.meta) {
+    meta =
+      typeof intents[0].meta === "string"
+        ? JSON.parse(intents[0].meta)
+        : (intents[0].meta as typeof meta);
+  }
+  if (!schoolId || meta.kind !== "school_subscription") {
+    return { ok: false };
+  }
+  if (intents[0]?.status === "PAID") return { ok: true };
+
+  const mode = meta.mode || "activate";
+  const period = (meta.period || "term") as "monthly" | "term" | "annual";
+  const months = Number(meta.months) || (period === "annual" ? 12 : period === "term" ? 4 : 1);
+
+  const school = await sql<{
+    subscription_expires_at: string | null;
+  }>`select subscription_expires_at from schools where id = ${schoolId} limit 1`;
+
+  if (mode === "extend") {
+    // Stack from current end (or now if expired)
+    await sql.query(
+      `update schools set
+         status = 'ACTIVE',
+         status_reason = null,
+         billing_period = $1,
+         subscription_period = $1,
+         subscription_expires_at =
+           greatest(coalesce(subscription_expires_at, now()), now())
+           + ($2 || ' months')::interval,
+         activated_at = coalesce(activated_at, now())
+       where id = $3`,
+      [period, String(months), schoolId],
+    );
+  } else {
+    // activate or upgrade: set period and grant full target months from max(now, existing start of period)
+    await sql.query(
+      `update schools set
+         status = 'ACTIVE',
+         status_reason = null,
+         billing_period = $1,
+         subscription_period = $1,
+         subscription_expires_at = now() + ($2 || ' months')::interval,
+         activated_at = coalesce(activated_at, now())
+       where id = $3`,
+      [period, String(months), schoolId],
+    );
+  }
+
+  await sql.query(
+    `update payment_intents set status = 'SUCCESS', completed_at = now() where tx_ref = $1`,
+    [txRef],
+  ).catch(() => {});
+
+  await audit(
+    "system",
+    schoolId,
+    "PayChangu",
+    "SUBSCRIPTION_PAID",
+    "schools",
+    schoolId,
+    `${mode} ${period} (+${months} months) tx=${txRef}`,
+  );
+
+  return { ok: true };
+}

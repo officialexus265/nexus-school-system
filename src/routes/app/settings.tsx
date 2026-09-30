@@ -21,6 +21,8 @@ import {
   sendSchoolPush,
   updateSchool,
   updateSchoolBillingPrefs,
+  initiateSchoolSubscriptionPayment,
+  confirmPaychanguReturn,
   beginTotpSetup,
   confirmTotpSetup,
   disableTotp,
@@ -62,6 +64,21 @@ function SettingsPage() {
   const [totpUrl, setTotpUrl] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const tx = sp.get("tx_ref");
+    if (tx && (sp.get("billing") === "1" || window.location.pathname.includes("settings"))) {
+      void confirmPaychanguReturn({ data: { txRef: tx } })
+        .then((r) => {
+          if (r.ok) toast.success("Subscription payment confirmed");
+          void invalidate();
+          window.history.replaceState({}, "", "/app/settings");
+        })
+        .catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     void getTotpStatus()
@@ -695,6 +712,76 @@ function SettingsPage() {
           >
             Save billing preference
           </Button>
+
+          <div className="mt-6 space-y-2 border-t border-border pt-4">
+            <p className="text-sm font-medium">Pay with PayChangu (mobile money / card)</p>
+            <p className="text-xs text-muted-foreground">
+              Term = 4 months · Year = 12 months (3 terms).{" "}
+              <strong>Activate / Upgrade</strong> pays for a period (upgrade credits what you already
+              paid toward a longer plan). <strong>Extend</strong> stacks a full new period after your
+              current end date.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Status: <strong>{s.status}</strong>
+              {(s as { subscription_expires_at?: string }).subscription_expires_at
+                ? ` · expires ${String((s as { subscription_expires_at?: string }).subscription_expires_at).slice(0, 10)}`
+                : ""}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const r = await initiateSchoolSubscriptionPayment({
+                      data: {
+                        schoolId: s.id,
+                        mode: s.status === "PENDING_PAYMENT" ? "activate" : "upgrade",
+                        period: billingPeriod,
+                        customerEmail: s.owner_email || s.email || undefined,
+                        customerName: s.owner_name || s.name,
+                      },
+                    });
+                    if ((r as { freeUpgrade?: boolean }).freeUpgrade) {
+                      toast.success("Upgraded with credit — no payment due");
+                      await invalidate();
+                      return;
+                    }
+                    const url = (r as { checkoutUrl?: string }).checkoutUrl;
+                    if (url) window.location.href = url;
+                    else toast.message("Checkout started");
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Payment failed");
+                  }
+                }}
+              >
+                {s.status === "PENDING_PAYMENT" ? "Pay & activate" : "Pay / upgrade"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    const r = await initiateSchoolSubscriptionPayment({
+                      data: {
+                        schoolId: s.id,
+                        mode: "extend",
+                        period: billingPeriod,
+                        customerEmail: s.owner_email || s.email || undefined,
+                        customerName: s.owner_name || s.name,
+                      },
+                    });
+                    const url = (r as { checkoutUrl?: string }).checkoutUrl;
+                    if (url) window.location.href = url;
+                    else toast.message("Checkout started");
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Payment failed");
+                  }
+                }}
+              >
+                Extend (add full period)
+              </Button>
+            </div>
+          </div>
         </section>
       <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
         <h2 className="font-display text-xl">Push notifications (FCM)</h2>
