@@ -1,60 +1,75 @@
-import { useEffect, useState } from "react";
+
+import { useEffect } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getPublicPromotion } from "@/lib/nexus/server";
+import { createServerFn } from "@tanstack/react-start";
 import { Button } from "@/components/ui/button";
 
+/** Loader-safe public promo fetch (no auth). */
+const loadPromo = createServerFn({ method: "GET" })
+  .validator((data: { slug: string }) => data)
+  .handler(async ({ data }) => {
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    const rows = await sql`
+      select title, description, og_image_url, kind, discount_pct
+      from platform_promotions
+      where public_slug = ${data.slug.trim()} and active = true
+      limit 1
+    `.catch(() => []);
+    const p = rows[0] as
+      | {
+          title: string;
+          description: string | null;
+          og_image_url: string | null;
+          kind: string;
+          discount_pct: number | null;
+        }
+      | undefined;
+    if (!p) throw new Error("Promotion not found");
+    return {
+      title: p.title,
+      description: p.description,
+      ogImageUrl: p.og_image_url,
+      kind: p.kind,
+      discountPct: p.discount_pct != null ? Number(p.discount_pct) : null,
+    };
+  });
+
 export const Route = createFileRoute("/promo/$slug")({
+  loader: async ({ params }) => {
+    return loadPromo({ data: { slug: params.slug } });
+  },
+  head: ({ loaderData }) => {
+    const title = loaderData?.title || "NEXUS";
+    const description =
+      loaderData?.description ||
+      "NEXUS school management — academics, finance, results and parent app.";
+    const image = loaderData?.ogImageUrl || "/og.jpg";
+    return {
+      meta: [
+        { title },
+        { name: "description", content: description },
+        { property: "og:title", content: title },
+        { property: "og:description", content: description },
+        { property: "og:image", content: image },
+        { property: "og:type", content: "website" },
+        { name: "twitter:card", content: "summary_large_image" },
+        { name: "twitter:title", content: title },
+        { name: "twitter:description", content: description },
+        { name: "twitter:image", content: image },
+      ],
+    };
+  },
   component: PromoPage,
 });
 
 function PromoPage() {
-  const { slug } = Route.useParams();
-  const [data, setData] = useState<{
-    title: string;
-    description: string | null;
-    ogImageUrl: string | null;
-    kind: string;
-    discountPct: number | null;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getPublicPromotion({ data: { slug } })
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "Not found"));
-  }, [slug]);
+  const data = Route.useLoaderData();
 
   useEffect(() => {
     if (!data) return;
     document.title = data.title;
-    const setMeta = (property: string, content: string) => {
-      let el = document.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null;
-      if (!el) {
-        el = document.createElement("meta");
-        el.setAttribute("property", property);
-        document.head.appendChild(el);
-      }
-      el.setAttribute("content", content);
-    };
-    setMeta("og:title", data.title);
-    if (data.description) setMeta("og:description", data.description);
-    if (data.ogImageUrl) setMeta("og:image", data.ogImageUrl);
   }, [data]);
-
-  if (error) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center p-6 text-sm text-muted-foreground">
-        {error}
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center p-6 text-sm text-muted-foreground">
-        Loading…
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-dvh bg-ink px-4 py-12 text-foam">

@@ -9792,10 +9792,8 @@ export const createPlatformPromotion = createServerFn({ method: "POST" })
       process.env.BETTER_AUTH_URL ||
       process.env.VITE_APP_URL ||
       "http://localhost:8080";
-    const path =
-      data.kind === "SIGNUP"
-        ? `/login?promo=${slug}`
-        : `/promo/${slug}`;
+    // Always use /promo/{slug} so WhatsApp/Facebook can read OG title, description, image
+    const path = `/promo/${slug}`;
     return {
       ok: true,
       id,

@@ -79,37 +79,32 @@ export async function uploadToCloudinary(input: {
   }
   const fileData = `data:${mime};base64,${b64}`;
 
-  const endpoint = `https://api.cloudinary.com/v1_1/${cloud}/auto/upload`;
+  const endpoint = `https://api.cloudinary.com/v1_1/${cloud}/image/upload`;
   const body = new URLSearchParams();
   body.set("file", fileData);
   if (input.folder) body.set("folder", input.folder);
-  if (input.filename) body.set("public_id", input.filename.replace(/\.[^.]+$/, ""));
 
-  if (preset) {
-    // Unsigned upload (no signature)
-    body.set("upload_preset", preset);
-  } else {
-    if (!apiKey || !apiSecret) {
-      throw new Error(
-        "Set CLOUDINARY_UPLOAD_PRESET (unsigned) or CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET",
-      );
-    }
+  // Prefer signed upload (API key + secret) — does not need an upload preset.
+  // Preset is only used when keys are missing (unsigned mode).
+  if (apiKey && apiSecret) {
     const timestamp = Math.floor(Date.now() / 1000);
     body.set("api_key", apiKey);
     body.set("timestamp", String(timestamp));
-    // Simple signature: sha1 of sorted params + secret (Cloudinary convention)
     const { createHash } = await import("crypto");
     const toSign: string[] = [];
     if (input.folder) toSign.push(`folder=${input.folder}`);
-    if (input.filename) {
-      toSign.push(`public_id=${input.filename.replace(/\.[^.]+$/, "")}`);
-    }
     toSign.push(`timestamp=${timestamp}`);
     toSign.sort();
     const signature = createHash("sha1")
       .update(toSign.join("&") + apiSecret)
       .digest("hex");
     body.set("signature", signature);
+  } else if (preset) {
+    body.set("upload_preset", preset);
+  } else {
+    throw new Error(
+      "Cloudinary: set CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET (recommended), or create an unsigned upload preset and set CLOUDINARY_UPLOAD_PRESET",
+    );
   }
 
   const res = await fetch(endpoint, {
@@ -125,7 +120,13 @@ export async function uploadToCloudinary(input: {
     error?: { message?: string };
   };
   if (!res.ok || !json.secure_url) {
-    throw new Error(json.error?.message || `Cloudinary upload failed (${res.status})`);
+    const msg = json.error?.message || `Cloudinary upload failed (${res.status})`;
+    if (/preset/i.test(msg)) {
+      throw new Error(
+        `${msg}. Fix: remove CLOUDINARY_UPLOAD_PRESET from Vercel (or create that preset in Cloudinary Settings → Upload), and ensure CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET are set.`,
+      );
+    }
+    throw new Error(msg);
   }
   return {
     key: json.public_id || `cloudinary/${Date.now()}`,
