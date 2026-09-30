@@ -22,6 +22,7 @@ import {
   updateSchoolAccountRequest,
   wipeAllSchools,
   updateSchoolByPlatform,
+  grantSchoolAccessPeriod,
 } from "@/lib/nexus/server";
 import {
   BILLING_TIER_OPTIONS,
@@ -327,57 +328,71 @@ function PlatformPage() {
                   Grouped by city → area. Soft-deleted schools stay 14 days for owner export.
                 </p>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="flex w-full flex-col gap-2 sm:max-w-xl">
                 <Input
-                  className="w-full sm:w-64"
+                  className="w-full"
                   placeholder="Search name, city, area, email…"
                   value={schoolSearch}
                   onChange={(e) => setSchoolSearch(e.target.value)}
                 />
-
-            <div className="mt-3 flex flex-wrap gap-1">
-              {(
-                [
-                  ["all", "All"],
-                  ["active", "Active"],
-                  ["pending", "Pending / unpaid"],
-                  ["balance", "Balances due"],
-                  ["paused", "Paused / suspended"],
-                  ["deleted", "Deleted (grace)"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setSchoolStatusTab(id)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${
-                    schoolStatusTab === id
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-muted-foreground"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={async () => {
-                    try {
-                      const r = await purgeExpiredDeletedSchools();
-                      toast.success(`Purged ${r.purged} expired school(s)`);
-                      await invalidate();
-                    } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Purge failed");
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <select
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm sm:min-w-[14rem]"
+                    value={schoolStatusTab}
+                    onChange={(e) =>
+                      setSchoolStatusTab(
+                        e.target.value as
+                          | "all"
+                          | "active"
+                          | "pending"
+                          | "balance"
+                          | "paused"
+                          | "deleted",
+                      )
                     }
-                  }}
-                >
-                  Purge expired deletions
-                </Button>
+                    aria-label="Filter schools by status"
+                  >
+                    <option value="all">All schools</option>
+                    <option value="active">Active</option>
+                    <option value="pending">Pending / unpaid</option>
+                    <option value="balance">Balances due</option>
+                    <option value="paused">Paused / suspended</option>
+                    <option value="deleted">Deleted (14-day grace)</option>
+                  </select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    title="Permanently remove schools whose 14-day export grace after deletion has ended. Soft-deleted schools that are still within 14 days are not touched."
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          "Permanently delete schools whose 14-day grace period after soft-delete has expired?\n\nSchools still inside the 14-day window are not affected.",
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        const r = await purgeExpiredDeletedSchools();
+                        toast.success(
+                          r.purged
+                            ? `Permanently removed ${r.purged} school(s)`
+                            : "No expired soft-deletes to purge",
+                        );
+                        await invalidate();
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Purge failed");
+                      }
+                    }}
+                  >
+                    Purge expired deletions
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Purge only removes soft-deleted schools after the 14-day download window ends —
+                  not active schools.
+                </p>
               </div>
             </div>
 
@@ -524,6 +539,72 @@ function PlatformPage() {
                                         }}
                                       >
                                         Edit
+                                      </Button>
+
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-emerald-700"
+                                        onClick={async () => {
+                                          const unitRaw = window.prompt(
+                                            "Grant free/partner access.\nUnit: days | months | terms | years\n(1 term = 4 months)",
+                                            "months",
+                                          );
+                                          if (!unitRaw) return;
+                                          const unit = unitRaw.trim().toLowerCase();
+                                          if (
+                                            !["days", "months", "terms", "years"].includes(unit)
+                                          ) {
+                                            toast.error("Use days, months, terms, or years");
+                                            return;
+                                          }
+                                          const amountRaw = window.prompt(
+                                            `How many ${unit}?`,
+                                            unit === "days" ? "14" : unit === "terms" ? "1" : "1",
+                                          );
+                                          if (!amountRaw) return;
+                                          const amount = Number(amountRaw);
+                                          if (!amount || amount < 1) {
+                                            toast.error("Enter a positive number");
+                                            return;
+                                          }
+                                          const reason =
+                                            window.prompt(
+                                              "Label for this grant (shown in ledger):",
+                                              "Partner / pilot access",
+                                            ) || "Partner / pilot access";
+                                          const stack =
+                                            window.confirm(
+                                              "OK = add on top of current end date\nCancel = start the period from today",
+                                            ) === true;
+                                          try {
+                                            const r = await grantSchoolAccessPeriod({
+                                              data: {
+                                                schoolId: s.id,
+                                                amount,
+                                                unit: unit as
+                                                  | "days"
+                                                  | "months"
+                                                  | "terms"
+                                                  | "years",
+                                                reason,
+                                                stack,
+                                              },
+                                            });
+                                            toast.success(
+                                              r.expiresAt
+                                                ? `Access until ${String(r.expiresAt).slice(0, 10)}`
+                                                : "Access granted",
+                                            );
+                                            await invalidate();
+                                          } catch (e) {
+                                            toast.error(
+                                              e instanceof Error ? e.message : "Grant failed",
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        Grant access
                                       </Button>
                                       {s.status !== "PAUSED" && s.status !== "SUSPENDED" && (
                                         <Button

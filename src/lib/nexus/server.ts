@@ -8687,3 +8687,134 @@ export async function applySchoolSubscriptionPayment(txRef: string): Promise<{ o
 
   return { ok: true };
 }
+
+
+/**
+ * Platform owner grants a free/partner access window (pilot, demo, partner acknowledgement).
+ * Activates the school and sets subscription_expires_at from now + duration.
+ */
+export const grantSchoolAccessPeriod = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      /** Number of units */
+      amount: number;
+      unit: "days" | "months" | "terms" | "years";
+      reason?: string;
+      /** If true, stack on existing end date when still in future; else start from now */
+      stack?: boolean;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+
+    const amount = Math.floor(Number(data.amount));
+    if (!amount || amount < 1 || amount > 120) {
+      throw new Error("Enter a period between 1 and 120");
+    }
+
+    let months = 0;
+    let days = 0;
+    if (data.unit === "days") days = amount;
+    else if (data.unit === "months") months = amount;
+    else if (data.unit === "terms") months = amount * 4; // 1 term = 4 months
+    else if (data.unit === "years") months = amount * 12;
+    else throw new Error("Invalid unit");
+
+    const sql = await getSql();
+    try {
+      await sql.query(`alter table schools add column if not exists status_reason text`);
+    } catch {
+      /* ignore */
+    }
+
+    const schools = await sql<School>`select * from schools where id = ${data.schoolId} limit 1`;
+    if (!schools[0]) throw new Error("School not found");
+    const from = schools[0].status;
+
+    const reason =
+      data.reason?.trim() ||
+      `Partner / pilot access: ${amount} ${data.unit} granted by platform`;
+
+    if (data.stack) {
+      if (days) {
+        await sql.query(
+          `update schools set
+             status = 'ACTIVE',
+             status_reason = $1,
+             activated_at = coalesce(activated_at, now()),
+             grace_ends_at = null,
+             subscription_expires_at =
+               greatest(coalesce(subscription_expires_at, now()), now())
+               + ($2 || ' days')::interval
+           where id = $3`,
+          [reason, String(days), data.schoolId],
+        );
+      } else {
+        await sql.query(
+          `update schools set
+             status = 'ACTIVE',
+             status_reason = $1,
+             activated_at = coalesce(activated_at, now()),
+             grace_ends_at = null,
+             subscription_expires_at =
+               greatest(coalesce(subscription_expires_at, now()), now())
+               + ($2 || ' months')::interval
+           where id = $3`,
+          [reason, String(months), data.schoolId],
+        );
+      }
+    } else {
+      if (days) {
+        await sql.query(
+          `update schools set
+             status = 'ACTIVE',
+             status_reason = $1,
+             activated_at = coalesce(activated_at, now()),
+             grace_ends_at = null,
+             subscription_expires_at = now() + ($2 || ' days')::interval
+           where id = $3`,
+          [reason, String(days), data.schoolId],
+        );
+      } else {
+        await sql.query(
+          `update schools set
+             status = 'ACTIVE',
+             status_reason = $1,
+             activated_at = coalesce(activated_at, now()),
+             grace_ends_at = null,
+             subscription_expires_at = now() + ($2 || ' months')::interval
+           where id = $3`,
+          [reason, String(months), data.schoolId],
+        );
+      }
+    }
+
+    const eid = nid(context.userId, `grant-${Date.now()}`);
+    await sql.query(
+      `insert into subscription_events (id, school_id, from_status, to_status, reason, actor_user_id)
+       values ($1,$2,$3,'ACTIVE',$4,$5)`,
+      [eid, data.schoolId, from, reason, context.userId],
+    );
+
+    await audit(
+      context.userId,
+      data.schoolId,
+      "Platform owner",
+      "ACCESS_GRANTED",
+      "schools",
+      data.schoolId,
+      reason,
+    );
+
+    const updated = await sql<{ subscription_expires_at: string | null }>`
+      select subscription_expires_at from schools where id = ${data.schoolId} limit 1
+    `;
+    return {
+      ok: true,
+      expiresAt: updated[0]?.subscription_expires_at || null,
+      reason,
+    };
+  });
