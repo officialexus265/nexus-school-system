@@ -3092,11 +3092,21 @@ export const markPlatformInvoicePaid = createServerFn({ method: "POST" })
       select school_id from platform_invoices where id = ${data.invoiceId} limit 1
     `;
     if (inv[0]) {
+      const full = await sql<{ billing_period: string | null }>`
+        select billing_period from platform_invoices where id = ${data.invoiceId} limit 1
+      `;
+      const period = (full[0]?.billing_period || "monthly") as string;
+      const months =
+        period === "annual" ? 12 : period === "term" ? 4 : 1;
       await sql.query(
-        `update schools set status = 'ACTIVE',
-           subscription_expires_at = now() + interval '32 days'
-         where id = $1`,
-        [inv[0].school_id],
+        `update schools set status = 'ACTIVE', status_reason = null,
+           billing_period = $1,
+           subscription_expires_at =
+             greatest(coalesce(subscription_expires_at, now()), now())
+             + ($2 || ' months')::interval,
+           activated_at = coalesce(activated_at, now())
+         where id = $3`,
+        [period, String(months), inv[0].school_id],
       );
     }
     return { ok: true };
@@ -5050,9 +5060,43 @@ export const generateReportCard = createServerFn({ method: "POST" })
           ) / 10;
     const position = results.find((r) => r.position != null)?.position ?? null;
 
+    const schoolName = school[0].name;
+    const studentName = `${student[0].first_name} ${student[0].last_name}`;
+    const classLabel = cls[0]
+      ? `${cls[0].name}${cls[0].stream ? " " + cls[0].stream : ""}`
+      : "—";
+    const termName = term[0]?.name || "Term";
+    const rowsHtml = rows
+      .map(
+        (r) =>
+          `<tr><td>${r.subject}</td><td>${r.code || ""}</td><td>${r.score ?? "—"}</td><td>${r.grade || "—"}</td></tr>`,
+      )
+      .join("");
+    const printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Report — ${studentName}</title>
+<style>
+body{font-family:Georgia,serif;max-width:720px;margin:24px auto;color:#111;padding:0 16px}
+h1{font-size:20px;margin:0}h2{font-size:16px;margin:16px 0 8px}
+.muted{color:#555;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}
+th{background:#f5f5f5}@media print{button{display:none}}
+</style></head><body>
+<header style="border-bottom:2px solid ${school[0].primary_color || "#0f766e"};padding-bottom:12px">
+<h1>${schoolName}</h1>
+<p class="muted">${school[0].motto || ""} · ${school[0].address || ""} · ${school[0].phone || ""}</p>
+</header>
+<h2>Term report card — ${termName}</h2>
+<p><strong>${studentName}</strong> · Adm ${student[0].admission_number} · ${classLabel}</p>
+<table><thead><tr><th>Subject</th><th>Code</th><th>Score</th><th>Grade</th></tr></thead>
+<tbody>${rowsHtml}</tbody></table>
+<p style="margin-top:16px"><strong>Average:</strong> ${average ?? "—"}
+${position != null ? ` · <strong>Position:</strong> ${position}` : ""}</p>
+<p class="muted">Generated ${new Date().toLocaleString()} · NEXUS School Management</p>
+<p><button onclick="window.print()">Print / Save PDF</button></p>
+</body></html>`;
+
     return {
       school: {
-        name: school[0].name,
+        name: schoolName,
         motto: school[0].motto,
         logo_mark: school[0].logo_mark,
         primary_color: school[0].primary_color || "#0f766e",
@@ -5060,17 +5104,16 @@ export const generateReportCard = createServerFn({ method: "POST" })
         phone: school[0].phone,
       },
       student: {
-        name: `${student[0].first_name} ${student[0].last_name}`,
+        name: studentName,
         admission_number: student[0].admission_number,
-        classLabel: cls[0]
-          ? `${cls[0].section} ${cls[0].name}${cls[0].stream ? " " + cls[0].stream : ""}`
-          : "—",
+        classLabel,
       },
-      term: term[0]?.name || "Term",
+      term: termName,
       rows,
       average,
       position,
       generatedAt: new Date().toISOString(),
+      printHtml,
     };
   });
 
@@ -6440,6 +6483,9 @@ export const updatePlatformSettings = createServerFn({ method: "POST" })
     }
     if (data.googleOauthTestUsersUrl !== undefined) {
       pairs.push(["google_oauth_test_users_url", data.googleOauthTestUsersUrl.trim()]);
+    }
+    if (data.platformAlertEmail !== undefined) {
+      pairs.push(["platform_alert_email", data.platformAlertEmail.trim()]);
     }
     for (const [key, value] of pairs) {
       await sql.query(
@@ -8900,11 +8946,19 @@ export async function processSubscriptionLifecycle(): Promise<{
     /* ignore */
   }
 
-  const platformEmail =
+  let platformEmail =
     process.env.PLATFORM_ALERT_EMAIL ||
     process.env.EMAIL_FROM?.match(/<([^>]+)>/)?.[1] ||
     process.env.EMAIL_FROM ||
     "";
+  try {
+    const pe = await sql<{ value: string }>`
+      select value from platform_settings where key = 'platform_alert_email' limit 1
+    `;
+    if (pe[0]?.value?.trim()) platformEmail = pe[0].value.trim();
+  } catch {
+    /* ignore */
+  }
 
   // Enter grace: expired ACTIVE
   const toGrace = await sql<{
@@ -9031,3 +9085,226 @@ export async function processSubscriptionLifecycle(): Promise<{
 
   return { warned, enteredGrace, paused };
 }
+
+
+export const createSupportTicket = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      subject: string;
+      body: string;
+      priority?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    try {
+      await sql.query(`
+        create table if not exists support_tickets (
+          id text primary key,
+          school_id text,
+          created_by_user_id text,
+          created_by_name text,
+          subject text not null,
+          body text not null,
+          status text not null default 'OPEN',
+          priority text default 'NORMAL',
+          platform_reply text,
+          resolved_at timestamptz,
+          created_at timestamptz default now(),
+          updated_at timestamptz default now()
+        )`);
+    } catch {
+      /* ignore */
+    }
+    const id = nid(context.userId, `tkt-${Date.now()}`);
+    await sql.query(
+      `insert into support_tickets (
+         id, school_id, created_by_user_id, created_by_name, subject, body, status, priority
+       ) values ($1,$2,$3,$4,$5,$6,'OPEN',$7)`,
+      [
+        id,
+        data.schoolId,
+        context.userId,
+        "School staff",
+        data.subject.trim(),
+        data.body.trim(),
+        data.priority || "NORMAL",
+      ],
+    );
+    // Notify platform
+    try {
+      const { sendEmail } = await import("./email");
+      let to = process.env.PLATFORM_ALERT_EMAIL || "";
+      const pe = await sql<{ value: string }>`
+        select value from platform_settings where key = 'platform_alert_email' limit 1
+      `;
+      if (pe[0]?.value) to = pe[0].value;
+      if (to) {
+        await sendEmail({
+          to,
+          subject: `NEXUS support: ${data.subject.trim()}`,
+          text: data.body.trim(),
+          html: `<p>${data.body.trim()}</p>`,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    return { ok: true, id };
+  });
+
+export const listSupportTickets = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId?: string; platformAll?: boolean }) => data)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const platform = await isPlatformOwner(context.userId);
+    if (data.platformAll) {
+      if (!platform) throw new Error("Platform owner only");
+      const tickets = await sql`
+        select t.*, s.name as school_name
+        from support_tickets t
+        left join schools s on s.id = t.school_id
+        order by t.created_at desc
+        limit 100
+      `;
+      return { tickets };
+    }
+    if (!data.schoolId) throw new Error("schoolId required");
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const tickets = await sql`
+      select * from support_tickets
+      where school_id = ${data.schoolId}
+      order by created_at desc
+      limit 50
+    `;
+    return { tickets };
+  });
+
+export const replySupportTicket = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      ticketId: string;
+      reply: string;
+      status?: "OPEN" | "REPLIED" | "RESOLVED";
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    await sql.query(
+      `update support_tickets set
+         platform_reply = $1,
+         status = $2,
+         resolved_at = case when $2 = 'RESOLVED' then now() else resolved_at end,
+         updated_at = now()
+       where id = $3`,
+      [data.reply.trim(), data.status || "REPLIED", data.ticketId],
+    );
+    return { ok: true };
+  });
+
+export const listSchoolCampuses = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    try {
+      await sql.query(`
+        create table if not exists school_campuses (
+          id text primary key,
+          school_id text not null,
+          name text not null,
+          area text,
+          city text,
+          is_main boolean default false,
+          created_at timestamptz default now()
+        )`);
+    } catch {
+      /* ignore */
+    }
+    const campuses = await sql`
+      select * from school_campuses where school_id = ${data.schoolId} order by is_main desc, name
+    `;
+    return { campuses };
+  });
+
+export const saveSchoolCampus = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      id?: string;
+      name: string;
+      area?: string;
+      city?: string;
+      isMain?: boolean;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    await requirePermission(context.userId, data.schoolId, "school.settings.manage");
+    const sql = await getSql();
+    const id = data.id || nid(context.userId, `camp-${Date.now()}`);
+    if (data.isMain) {
+      await sql.query(
+        `update school_campuses set is_main = false where school_id = $1`,
+        [data.schoolId],
+      );
+    }
+    await sql.query(
+      `insert into school_campuses (id, school_id, name, area, city, is_main)
+       values ($1,$2,$3,$4,$5,$6)
+       on conflict (id) do update set
+         name = excluded.name,
+         area = excluded.area,
+         city = excluded.city,
+         is_main = excluded.is_main`,
+      [
+        id,
+        data.schoolId,
+        data.name.trim(),
+        data.area?.trim() || null,
+        data.city?.trim() || null,
+        !!data.isMain,
+      ],
+    );
+    return { ok: true, id };
+  });
+
+export const exportLedgerCsv = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    const rows = await sql<{
+      created_at: string;
+      action: string;
+      actor: string;
+      detail: string | null;
+      entity_type: string | null;
+      entity_id: string | null;
+    }>`
+      select created_at::text, action, actor, detail, entity_type, entity_id
+      from audit_log
+      where school_id = ${data.schoolId}
+      order by created_at desc
+      limit 2000
+    `;
+    const header = "created_at,action,actor,detail,entity_type,entity_id\n";
+    const esc = (v: string | null | undefined) =>
+      `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const body = rows
+      .map(
+        (r) =>
+          `${esc(r.created_at)},${esc(r.action)},${esc(r.actor)},${esc(r.detail)},${esc(r.entity_type)},${esc(r.entity_id)}`,
+      )
+      .join("\n");
+    return { csv: header + body, count: rows.length };
+  });

@@ -5,6 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSnapshot } from "@/hooks/use-snapshot";
 import { formatDate } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { exportLedgerCsv } from "@/lib/nexus/server";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/ledger")({
   component: LedgerPage,
@@ -44,6 +47,32 @@ function LedgerPage() {
         kicker="Activity"
         title="Ledger"
         description="School activity log: parent registrations, parent app publish, fees, results, and staff actions."
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                const r = await exportLedgerCsv({
+                  data: { schoolId: q.data!.school.id },
+                });
+                const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `ledger-${q.data!.school.slug || "school"}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success(`Exported ${r.count} rows`);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Export failed");
+              }
+            }}
+          >
+            Download CSV
+          </Button>
+        }
       />
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">

@@ -493,6 +493,7 @@ function StaffInvite({
             >
               <option value="teacher">Teacher</option>
               <option value="bursar">Bursar</option>
+              <option value="accounts">Accounts / billing</option>
               <option value="exam">Exam officer</option>
               <option value="head">Head teacher</option>
               <option value="owner">Owner</option>

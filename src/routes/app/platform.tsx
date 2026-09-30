@@ -118,13 +118,15 @@ function PlatformPage() {
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
 
   const [contactPhoneDisplay, setContactPhoneDisplay] = useState("0980697476");
-  const [googleOauthTestUsersUrl, setGoogleOauthTestUsersUrl] = useState(
+  const [googleOauthTestUsersUrl,
+                      platformAlertEmail, setGoogleOauthTestUsersUrl] = useState(
     "https://console.cloud.google.com/auth/audience?project=nsms-510209",
   );
   const [contactPhoneE164, setContactPhoneE164] = useState("+265980697476");
   const [contactWhatsapp, setContactWhatsapp] = useState("265980697476");
   const [contactLabel, setContactLabel] = useState("system owner");
   const [supportEmail, setSupportEmail] = useState("");
+  const [platformAlertEmail, setPlatformAlertEmail] = useState("");
 
   const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([]);
 
@@ -150,6 +152,7 @@ function PlatformPage() {
         if (s.contact_whatsapp) setContactWhatsapp(s.contact_whatsapp);
         if (s.contact_label) setContactLabel(s.contact_label);
         if (s.support_email) setSupportEmail(s.support_email);
+        if (s.platform_alert_email) setPlatformAlertEmail(s.platform_alert_email);
         if (s.google_oauth_test_users_url)
           setGoogleOauthTestUsersUrl(s.google_oauth_test_users_url);
       })
@@ -991,6 +994,7 @@ function PlatformPage() {
                       contactLabel,
                       supportEmail,
                       googleOauthTestUsersUrl,
+                      platformAlertEmail,
                     },
                   });
                   toast.success("Login contact settings saved");

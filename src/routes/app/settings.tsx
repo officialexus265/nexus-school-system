@@ -21,6 +21,8 @@ import {
   sendSchoolPush,
   updateSchool,
   updateSchoolBillingPrefs,
+  listSchoolCampuses,
+  saveSchoolCampus,
   initiateSchoolSubscriptionPayment,
   confirmPaychanguReturn,
   beginTotpSetup,
@@ -81,6 +83,13 @@ function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    if (!s?.id) return;
+    void listSchoolCampuses({ data: { schoolId: s.id } })
+      .then((r) => setCampuses((r.campuses || []) as typeof campuses))
+      .catch(() => {});
+  }, [s?.id]);
+
+  useEffect(() => {
     void getTotpStatus()
       .then((r) => setTotpEnabled(r.enabled))
       .catch(() => {});
@@ -121,6 +130,10 @@ function SettingsPage() {
   const [smsFrom, setSmsFrom] = useState("");
   const [smsEnabled, setSmsEnabled] = useState(true);
   const [smsMasked, setSmsMasked] = useState<string | null>(null);
+  const [campuses, setCampuses] = useState<
+    { id: string; name: string; area: string | null; city: string | null; is_main: boolean }[]
+  >([]);
+  const [campusName, setCampusName] = useState("");
   const [billingPeriod, setBillingPeriod] = useState<"monthly" | "term" | "annual">("monthly");
 
 
@@ -783,6 +796,63 @@ function SettingsPage() {
             </div>
           </div>
         </section>
+      
+        <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)] lg:col-span-2">
+          <h2 className="font-display text-xl">Campuses / branches</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Optional. One school account can list multiple sites (e.g. Area 25 + Area 10). Main campus is marked for reports.
+          </p>
+          <ul className="mt-3 space-y-2 text-sm">
+            {campuses.map((c) => (
+              <li key={c.id} className="rounded-lg bg-secondary/40 px-3 py-2">
+                <strong>{c.name}</strong>
+                {c.is_main ? " · main" : ""}
+                {(c.area || c.city) && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {[c.area, c.city].filter(Boolean).join(", ")}
+                  </span>
+                )}
+              </li>
+            ))}
+            {campuses.length === 0 && (
+              <li className="text-muted-foreground">No campuses yet — defaults to this school address.</li>
+            )}
+          </ul>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Input
+              className="max-w-xs"
+              placeholder="New campus name"
+              value={campusName}
+              onChange={(e) => setCampusName(e.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!campusName.trim() || !s}
+              onClick={async () => {
+                try {
+                  await saveSchoolCampus({
+                    data: {
+                      schoolId: s!.id,
+                      name: campusName.trim(),
+                      isMain: campuses.length === 0,
+                    },
+                  });
+                  setCampusName("");
+                  const r = await listSchoolCampuses({ data: { schoolId: s!.id } });
+                  setCampuses((r.campuses || []) as typeof campuses);
+                  toast.success("Campus saved");
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                }
+              }}
+            >
+              Add campus
+            </Button>
+          </div>
+        </section>
+
       <section className="mt-6 rounded-xl bg-card p-5 shadow-[var(--shadow-border)]">
         <h2 className="font-display text-xl">Push notifications (FCM)</h2>
         <p className="mt-1 text-sm text-muted-foreground">

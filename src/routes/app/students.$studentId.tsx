@@ -147,21 +147,26 @@ function StudentFile() {
                   });
                   const w = window.open("", "_blank", "width=720,height=900");
                   if (!w || !rc.school) return;
+                  if ((rc as { printHtml?: string }).printHtml) {
+                    w.document.write((rc as { printHtml: string }).printHtml);
+                    w.document.close();
+                    return;
+                  }
                   const color = rc.school.primary_color || "#0f766e";
-                  const rows = (rc.results || [])
+                  const rows = (rc.rows || [])
                     .map(
                       (r: {
                         subject: string;
                         code?: string;
-                        score?: number;
-                        grade?: string;
+                        score?: number | null;
+                        grade?: string | null;
                       }) =>
                         `<tr><td>${r.subject}</td><td>${r.code || ""}</td><td>${r.score ?? "—"}</td><td>${r.grade || "—"}</td></tr>`,
                     )
                     .join("");
                   w.document.write(`<!DOCTYPE html><html><head><title>Report — ${rc.student.name}</title>
                 <style>
-                  body{font-family:system-ui,sans-serif;padding:32px;color:#111}
+                  body{font-family:Georgia,serif;padding:32px;color:#111}
                   h1{font-size:20px;margin:0;color:${color}}
                   .muted{color:#666;font-size:12px}
                   table{width:100%;border-collapse:collapse;margin-top:16px}
@@ -172,7 +177,7 @@ function StudentFile() {
                 <h1>${rc.school.name}</h1>
                 <p class="muted">${rc.school.motto || ""}</p>
                 <h2>Report card — ${rc.term}</h2>
-                <p><strong>${rc.student.name}</strong> · ${rc.student.admission_number}</p>
+                <p><strong>${rc.student.name}</strong> · ${rc.student.admission_number} · ${rc.student.classLabel || ""}</p>
                 <table><thead><tr><th>Subject</th><th>Code</th><th>Score</th><th>Grade</th></tr></thead>
                 <tbody>${rows}</tbody></table>
                 <p>Average: <strong>${rc.average ?? "—"}</strong>

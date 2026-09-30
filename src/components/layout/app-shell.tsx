@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Megaphone,
   Menu,
+  LifeBuoy,
   ScrollText,
   Settings,
   Shield,
@@ -36,8 +37,10 @@ const PLATFORM_NAV: NavItem[] = [
   { to: "/app/platform", label: "Schools", icon: Building2 },
   { to: "/app/invoices", label: "Invoices", icon: Wallet },
   { to: "/app/health", label: "Health", icon: Shield },
+  { to: "/app/support", label: "Support", icon: LifeBuoy },
   { to: "/app/tools", label: "Tools", icon: Settings },
 ];
+
 
 /** School owner / head — full school operations. */
 const SCHOOL_NAV: NavItem[] = [
@@ -58,8 +61,10 @@ const SCHOOL_NAV: NavItem[] = [
   { to: "/app/tools", label: "Tools", icon: Settings },
   { to: "/app/roles", label: "Roles", icon: Shield },
   { to: "/app/status", label: "Health", icon: Shield },
+  { to: "/app/support", label: "Support", icon: LifeBuoy },
   { to: "/app/settings", label: "School", icon: Settings },
 ];
+
 
 /** Classroom teacher — limited to teaching day-to-day. */
 const TEACHER_NAV: NavItem[] = [
@@ -80,6 +85,15 @@ const BURSAR_NAV: NavItem[] = [
   { to: "/app/finance", label: "Finance", icon: Wallet },
   { to: "/app/ledger", label: "Ledger", icon: ScrollText },
   { to: "/app/announcements", label: "Notices", icon: Megaphone },
+  { to: "/app/support", label: "Support", icon: LifeBuoy },
+];
+
+/** Accounts — billing contact focused */
+const ACCOUNTS_NAV: NavItem[] = [
+  { to: "/app", label: "Overview", icon: LayoutDashboard },
+  { to: "/app/finance", label: "Finance", icon: Wallet },
+  { to: "/app/settings", label: "Billing / school", icon: Settings },
+  { to: "/app/support", label: "Support", icon: LifeBuoy },
 ];
 
 function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
@@ -166,18 +180,22 @@ export function AppShell() {
     ? PLATFORM_NAV
     : role === "teacher" || role === "exam"
       ? TEACHER_NAV
-      : role === "bursar"
-        ? BURSAR_NAV
-        : SCHOOL_NAV;
+      : role === "accounts"
+        ? ACCOUNTS_NAV
+        : role === "bursar"
+          ? BURSAR_NAV
+          : SCHOOL_NAV;
   const sideTitle = isPlatform ? "Platform" : schoolName || "School";
   const sideSubtitle = isPlatform
     ? "Super admin"
     : schoolName
       ? role === "teacher"
         ? "Teacher workspace"
-        : role === "bursar"
-          ? "Bursar workspace"
-          : role === "head"
+        : role === "accounts"
+          ? "Accounts workspace"
+          : role === "bursar"
+            ? "Bursar workspace"
+            : role === "head"
             ? "Head teacher"
             : "School workspace"
       : "No school linked yet";
