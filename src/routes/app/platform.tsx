@@ -173,6 +173,15 @@ function PlatformPage() {
         if (s.platform_alert_email) setPlatformAlertEmail(s.platform_alert_email);
         if (s.google_oauth_test_users_url)
           setGoogleOauthTestUsersUrl(s.google_oauth_test_users_url);
+        // Discount / lucky defaults (persisted via saveDiscountSettings)
+        if (s.lucky_share_pct != null && s.lucky_share_pct !== "")
+          setLuckySharePct(s.lucky_share_pct);
+        if (s.lucky_discount_pct != null && s.lucky_discount_pct !== "")
+          setLuckyDiscountPct(s.lucky_discount_pct);
+        if (s.discount_first_subscription_pct != null && s.discount_first_subscription_pct !== "")
+          setFirstSubDiscPct(s.discount_first_subscription_pct);
+        if (s.discount_activation_pct != null && s.discount_activation_pct !== "")
+          setActivationDiscPct(s.discount_activation_pct);
       })
       .catch(() => {});
   }, [isPlatform]);
@@ -1038,8 +1047,12 @@ function PlatformPage() {
             <section className="mt-8 rounded-xl border border-border bg-card p-5">
               <h2 className="font-display text-xl">Discounts & lucky schools</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Default discounts for activation and first subscription. Lucky draw marks a random
-                share of schools (e.g. 20%) with the lucky discount on activation.
+                <strong>Activation discount</strong> — off the one-time fee when a school first
+                activates (before they can use the system).{" "}
+                <strong>First-subscription discount</strong> — off their first recurring plan
+                payment (monthly / term / year), not the activation fee.{" "}
+                <strong>Lucky draw</strong> randomly marks a share of schools with the lucky
+                activation discount.
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
@@ -1051,11 +1064,11 @@ function PlatformPage() {
                   <Input value={luckyDiscountPct} onChange={(e) => setLuckyDiscountPct(e.target.value)} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Default first-subscription discount (%)</Label>
+                  <Label>Default first-subscription discount (%) — recurring plan only</Label>
                   <Input value={firstSubDiscPct} onChange={(e) => setFirstSubDiscPct(e.target.value)} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Default activation discount (%)</Label>
+                  <Label>Default activation discount (%) — one-time open fee only</Label>
                   <Input value={activationDiscPct} onChange={(e) => setActivationDiscPct(e.target.value)} />
                 </div>
               </div>

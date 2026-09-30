@@ -1007,7 +1007,30 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
       (typeof process !== "undefined" && process.env.BETTER_AUTH_URL) ||
       (typeof process !== "undefined" && process.env.VITE_APP_URL) ||
       "http://localhost:8080";
-    const inviteLink = `${baseUrl.replace(/\/$/, "")}/set-password?token=${inviteToken}`;
+    
+    // Apply platform default discounts (activation + first subscription)
+    try {
+      const drows = await sql<{ key: string; value: string }>`
+        select key, value from platform_settings
+        where key in ('discount_activation_pct','discount_first_subscription_pct')
+      `;
+      const dmap = Object.fromEntries(drows.map((r) => [r.key, r.value]));
+      const act = Number(dmap.discount_activation_pct || 0);
+      const first = Number(dmap.discount_first_subscription_pct || 0);
+      if (act > 0 || first > 0) {
+        await sql.query(
+          `update schools set
+             activation_discount_pct = coalesce($1, 0),
+             first_sub_discount_pct = coalesce($2, 0)
+           where id = $3`,
+          [act, first, schoolId],
+        );
+      }
+    } catch {
+      /* columns may not exist yet */
+    }
+
+const inviteLink = `${baseUrl.replace(/\/$/, "")}/set-password?token=${inviteToken}`;
 
     console.log("[NEXUS] School invite created:", {
       school: name,
