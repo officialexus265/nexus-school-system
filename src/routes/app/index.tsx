@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSnapshot } from "@/hooks/use-snapshot";
+import { repairStaffSchoolLink } from "@/lib/nexus/server";
+import { toast } from "sonner";
+
 import {
   attendanceRate,
   classById,
@@ -42,6 +45,37 @@ function AppHome() {
     return <Navigate to="/app/platform" />;
   }
   if (persona === "parent") return <ParentHome snap={snap} />;
+  if (!snap.school || snap.school.id === "none") {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 rounded-xl bg-card p-6 shadow-[var(--shadow-border)]">
+        <h1 className="font-display text-2xl">No school linked yet</h1>
+        <p className="text-sm text-muted-foreground">
+          If you were invited as a teacher or staff member, your account may not have finished
+          linking. Use the button below (same email as the invite).
+        </p>
+        <Button
+          onClick={async () => {
+            try {
+              const r = await repairStaffSchoolLink();
+              if (r.schoolSlug) {
+                useNexusSession.getState().setSchoolSlug(r.schoolSlug);
+              }
+              toast.success(r.schoolName ? `Linked to ${r.schoolName}` : "School linked");
+              window.location.href = "/app";
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Could not link school");
+            }
+          }}
+        >
+          Link my staff invite
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          School owners use the invitation from the system owner, not this button.
+        </p>
+      </div>
+    );
+  }
+
   if (false && persona === "platform") {
     return (
       <div>

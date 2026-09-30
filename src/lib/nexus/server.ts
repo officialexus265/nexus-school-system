@@ -116,6 +116,7 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     } as School;
     const platform = await isPlatformOwner(userId).catch(() => false);
     return {
+      membershipRole: "none",
       isPlatformOwner: platform,
       schoolLocked: false,
       school: placeholder,
@@ -145,6 +146,19 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
     } as Snapshot;
   }
   const sid = school.id;
+  let membershipRole = "owner";
+  try {
+    const mem = await sql<{ role: string }>`
+      select role from user_school_memberships
+      where user_id = ${userId} and school_id = ${sid} and status = 'ACTIVE'
+      limit 1
+    `;
+    if (mem[0]?.role) membershipRole = mem[0].role;
+    else if (school.owner_user_id === userId || school.user_id === userId) membershipRole = "owner";
+  } catch {
+    if (school.owner_user_id === userId || school.user_id === userId) membershipRole = "owner";
+  }
+
 
   const [
     staff,
@@ -210,7 +224,8 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
   const platformFlag = await isPlatformOwner(userId).catch(() => false);
   // Soft-lock: school staff still see snapshot but mutations throw via assertSchoolNotLocked
   return {
-    isPlatformOwner: platformFlag,
+    membershipRole,
+      isPlatformOwner: platformFlag,
     schoolLocked:
       !platformFlag &&
       (school.status === "SUSPENDED" ||
@@ -7156,7 +7171,32 @@ export const completeStaffInvite = createServerFn({ method: "POST" })
     `;
     const inv = rows[0];
     if (!inv) throw new Error("Staff invite not found");
-    if (inv.accepted_at) return { ok: true, schoolId: inv.school_id, already: true };
+    // If already accepted, still ensure membership exists (repair path for broken invites)
+    if (inv.accepted_at) {
+      const roleTitle = (inv.role_name || "teacher").toLowerCase();
+      const mid = nid(context.userId, `mem-${inv.school_id}`);
+      try {
+        await sql.query(
+          `insert into user_school_memberships (id, user_id, school_id, role, status)
+           values ($1,$2,$3,$4,'ACTIVE')
+           on conflict (user_id, school_id) do update set role = $4, status = 'ACTIVE'`,
+          [mid, context.userId, inv.school_id, roleTitle],
+        );
+      } catch (e) {
+        console.error("[completeStaffInvite] repair membership", e);
+      }
+      const sch = await sql<{ slug: string; name: string }>`
+        select slug, name from schools where id = ${inv.school_id} limit 1
+      `;
+      return {
+        ok: true,
+        schoolId: inv.school_id,
+        schoolSlug: sch[0]?.slug || "",
+        schoolName: sch[0]?.name || "",
+        roleName: roleTitle,
+        already: true,
+      };
+    }
     if (new Date(inv.expires_at).getTime() < Date.now()) {
       throw new Error("Invite expired");
     }
@@ -7171,24 +7211,32 @@ export const completeStaffInvite = createServerFn({ method: "POST" })
       );
     }
 
-    const roleTitle = inv.role_name || "teacher";
-    // Membership
+    const roleTitle = (inv.role_name || "teacher").toLowerCase();
+    // Canonical membership table used by loadSnapshot / tenancy
+    const mid = nid(context.userId, `mem-${inv.school_id}`);
     try {
       await sql.query(
-        `insert into school_memberships (id, school_id, user_id, role, created_at)
-         values ($1,$2,$3,$4,now())
-         on conflict do nothing`,
-        [nid(context.userId, `mem-${Date.now()}`), inv.school_id, context.userId, roleTitle],
+        `insert into user_school_memberships (id, user_id, school_id, role, status, role_id)
+         values ($1,$2,$3,$4,'ACTIVE',$5)
+         on conflict (user_id, school_id) do update set
+           role = excluded.role,
+           status = 'ACTIVE',
+           role_id = coalesce(excluded.role_id, user_school_memberships.role_id)`,
+        [mid, context.userId, inv.school_id, roleTitle, inv.role_id || null],
       );
-    } catch {
+    } catch (e) {
+      console.error("[completeStaffInvite] user_school_memberships", e);
+      // Fallback without role_id column
       try {
         await sql.query(
-          `insert into school_memberships (school_id, user_id, role)
-           values ($1,$2,$3) on conflict do nothing`,
-          [inv.school_id, context.userId, roleTitle],
+          `insert into user_school_memberships (id, user_id, school_id, role, status)
+           values ($1,$2,$3,$4,'ACTIVE')
+           on conflict (user_id, school_id) do update set role = $4, status = 'ACTIVE'`,
+          [mid, context.userId, inv.school_id, roleTitle],
         );
-      } catch (e) {
-        console.error("[completeStaffInvite] membership", e);
+      } catch (e2) {
+        console.error("[completeStaffInvite] membership fallback", e2);
+        throw new Error("Could not link you to the school. Contact the school owner.");
       }
     }
 
@@ -7661,4 +7709,75 @@ export const bulkImportParents = createServerFn({ method: "POST" })
       }
     }
     return { ok: true, created, linked };
+  });
+
+
+/** Repair: if user email matches a staff row / invite, ensure membership. */
+export const repairStaffSchoolLink = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const user = await sql<{ email: string }>`
+      select email from "user" where id = ${context.userId} limit 1
+    `;
+    const email = (user[0]?.email || "").toLowerCase();
+    if (!email) throw new Error("No email on account");
+
+    const staff = await sql<{ school_id: string; role_title: string | null }>`
+      select school_id, role_title from staff
+      where lower(email) = ${email}
+      order by created_at desc nulls last
+      limit 5
+    `.catch(() => [] as { school_id: string; role_title: string | null }[]);
+
+    const invites = await sql<{ school_id: string; role_name: string | null }>`
+      select school_id, role_name from staff_invites
+      where lower(email) = ${email}
+      order by created_at desc
+      limit 5
+    `.catch(() => [] as { school_id: string; role_name: string | null }[]);
+
+    const targets = [
+      ...staff.map((s) => ({
+        schoolId: s.school_id,
+        role: (s.role_title || "teacher").toLowerCase(),
+      })),
+      ...invites.map((i) => ({
+        schoolId: i.school_id,
+        role: (i.role_name || "teacher").toLowerCase(),
+      })),
+    ];
+    if (!targets.length) {
+      throw new Error("No staff invite or staff record found for your email");
+    }
+
+    const linked: string[] = [];
+    for (const trow of targets) {
+      const mid = nid(context.userId, `mem-${trow.schoolId}`);
+      try {
+        await sql.query(
+          `insert into user_school_memberships (id, user_id, school_id, role, status)
+           values ($1,$2,$3,$4,'ACTIVE')
+           on conflict (user_id, school_id) do update set role = $4, status = 'ACTIVE'`,
+          [mid, context.userId, trow.schoolId, trow.role],
+        );
+        await sql.query(
+          `update staff set user_id = $1, status = 'ACTIVE'
+           where school_id = $2 and lower(email) = $3`,
+          [context.userId, trow.schoolId, email],
+        ).catch(() => {});
+        linked.push(trow.schoolId);
+      } catch (e) {
+        console.error("[repairStaffSchoolLink]", e);
+      }
+    }
+    const sch = await sql<{ slug: string; name: string }>`
+      select slug, name from schools where id = ${linked[0]} limit 1
+    `;
+    return {
+      ok: true,
+      linked,
+      schoolSlug: sch[0]?.slug || "",
+      schoolName: sch[0]?.name || "",
+    };
   });

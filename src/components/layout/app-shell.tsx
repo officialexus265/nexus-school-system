@@ -38,7 +38,7 @@ const PLATFORM_NAV: NavItem[] = [
   { to: "/app/tools", label: "Tools", icon: Settings },
 ];
 
-/** School staff (owner and similar) — school operations. */
+/** School owner / head — full school operations. */
 const SCHOOL_NAV: NavItem[] = [
   { to: "/app", label: "Overview", icon: LayoutDashboard },
   { to: "/app/students", label: "Students", icon: GraduationCap },
@@ -57,6 +57,26 @@ const SCHOOL_NAV: NavItem[] = [
   { to: "/app/roles", label: "Roles", icon: Shield },
   { to: "/app/status", label: "Health", icon: Shield },
   { to: "/app/settings", label: "School", icon: Settings },
+];
+
+/** Classroom teacher — limited to teaching day-to-day. */
+const TEACHER_NAV: NavItem[] = [
+  { to: "/app", label: "Overview", icon: LayoutDashboard },
+  { to: "/app/students", label: "My students", icon: GraduationCap },
+  { to: "/app/attendance", label: "Register", icon: CalendarDays },
+  { to: "/app/results", label: "Marks / results", icon: ClipboardCheck },
+  { to: "/app/behaviour", label: "Behaviour", icon: Shield },
+  { to: "/app/announcements", label: "Notices", icon: Megaphone },
+  { to: "/app/calendar", label: "Calendar", icon: CalendarDays },
+  { to: "/app/documents", label: "Documents", icon: BookOpen },
+];
+
+/** Bursar — fees focused. */
+const BURSAR_NAV: NavItem[] = [
+  { to: "/app", label: "Overview", icon: LayoutDashboard },
+  { to: "/app/students", label: "Students", icon: GraduationCap },
+  { to: "/app/finance", label: "Finance", icon: Wallet },
+  { to: "/app/announcements", label: "Notices", icon: Megaphone },
 ];
 
 function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
@@ -132,14 +152,26 @@ export function AppShell() {
   const schoolLocked = Boolean(snap.data?.schoolLocked);
   const setSchoolSlug = useNexusSession((s) => s.setSchoolSlug);
   const schools = snap.data?.schools || [];
+  const role = (snap.data?.membershipRole || "owner").toLowerCase();
 
-
-  const items = isPlatform ? PLATFORM_NAV : SCHOOL_NAV;
+  const items = isPlatform
+    ? PLATFORM_NAV
+    : role === "teacher" || role === "exam"
+      ? TEACHER_NAV
+      : role === "bursar"
+        ? BURSAR_NAV
+        : SCHOOL_NAV;
   const sideTitle = isPlatform ? "Platform" : schoolName || "School";
   const sideSubtitle = isPlatform
     ? "Super admin"
     : schoolName
-      ? "School workspace"
+      ? role === "teacher"
+        ? "Teacher workspace"
+        : role === "bursar"
+          ? "Bursar workspace"
+          : role === "head"
+            ? "Head teacher"
+            : "School workspace"
       : "No school linked yet";
 
   // Platform owners should live on platform routes, not school overview by default

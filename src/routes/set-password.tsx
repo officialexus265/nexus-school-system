@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { authClient } from "@/lib/auth/client";
+import { useNexusSession } from "@/stores/session";
+
 import { NexusMark } from "@/components/brand/mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,8 @@ export const Route = createFileRoute("/set-password")({
 function SetPasswordPage() {
   const { token, staff_token } = Route.useSearch();
   const navigate = useNavigate();
+  const setSchoolSlug = useNexusSession((s) => s.setSchoolSlug);
+
   const [loading, setLoading] = useState(true);
   const [invite, setInvite] = useState<{
     schoolName: string;
@@ -123,7 +127,8 @@ function SetPasswordPage() {
             return;
           }
         }
-        await completeStaffInvite({ data: { token: staff_token } });
+        const done = await completeStaffInvite({ data: { token: staff_token } });
+        if (done.schoolSlug) setSchoolSlug(done.schoolSlug);
         setDone(true);
         setTimeout(() => {
           window.location.href = "/app";
