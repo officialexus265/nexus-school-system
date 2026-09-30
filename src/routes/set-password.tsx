@@ -189,7 +189,7 @@ function SetPasswordPage() {
         /* membership link best-effort */
       }
       setTimeout(() => {
-        window.location.href = "/app/setup";
+        window.location.href = "/app/activate";
       }, 1200);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");

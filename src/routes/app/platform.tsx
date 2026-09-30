@@ -31,6 +31,11 @@ import {
   wipeAllSchools,
   updateSchoolByPlatform,
   grantSchoolAccessPeriod,
+  applySchoolDiscount,
+  listPlatformPromotions,
+  createPlatformPromotion,
+  runLuckySchoolDraw,
+  saveDiscountSettings,
 } from "@/lib/nexus/server";
 import {
   BILLING_TIER_OPTIONS,
@@ -127,6 +132,16 @@ function PlatformPage() {
   const [contactLabel, setContactLabel] = useState("system owner");
   const [supportEmail, setSupportEmail] = useState("");
   const [platformAlertEmail, setPlatformAlertEmail] = useState("");
+  const [luckySharePct, setLuckySharePct] = useState("20");
+  const [luckyDiscountPct, setLuckyDiscountPct] = useState("15");
+  const [firstSubDiscPct, setFirstSubDiscPct] = useState("0");
+  const [activationDiscPct, setActivationDiscPct] = useState("0");
+  const [promoKind, setPromoKind] = useState<"DISCOUNT" | "SIGNUP">("SIGNUP");
+  const [promoTitle, setPromoTitle] = useState("");
+  const [promoDesc, setPromoDesc] = useState("");
+  const [promoOg, setPromoOg] = useState("");
+  const [promoDisc, setPromoDisc] = useState("10");
+  const [promoShareUrl, setPromoShareUrl] = useState<string | null>(null);
 
   const [accountRequests, setAccountRequests] = useState<AccountRequest[]>([]);
 
@@ -535,6 +550,33 @@ function PlatformPage() {
                                         Edit
                                       </Button>
 
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={async () => {
+                                          const pct = window.prompt(
+                                            "Activation discount % for this school (0-100)",
+                                            "10",
+                                          );
+                                          if (pct == null) return;
+                                          try {
+                                            await applySchoolDiscount({
+                                              data: {
+                                                schoolId: s.id,
+                                                activationDiscountPct: Number(pct) || 0,
+                                              },
+                                            });
+                                            toast.success("Discount applied");
+                                            await invalidate();
+                                          } catch (e) {
+                                            toast.error(
+                                              e instanceof Error ? e.message : "Failed",
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        Set discount
+                                      </Button>
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -1006,6 +1048,163 @@ function PlatformPage() {
               Save contact settings
             </Button>
           </section>
+        
+            <section className="mt-8 rounded-xl border border-border bg-card p-5">
+              <h2 className="font-display text-xl">Discounts & lucky schools</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Default discounts for activation and first subscription. Lucky draw marks a random
+                share of schools (e.g. 20%) with the lucky discount on activation.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Lucky share of schools (%)</Label>
+                  <Input value={luckySharePct} onChange={(e) => setLuckySharePct(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Lucky discount (%)</Label>
+                  <Input value={luckyDiscountPct} onChange={(e) => setLuckyDiscountPct(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Default first-subscription discount (%)</Label>
+                  <Input value={firstSubDiscPct} onChange={(e) => setFirstSubDiscPct(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Default activation discount (%)</Label>
+                  <Input value={activationDiscPct} onChange={(e) => setActivationDiscPct(e.target.value)} />
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await saveDiscountSettings({
+                        data: {
+                          luckySharePct: Number(luckySharePct) || 20,
+                          luckyDiscountPct: Number(luckyDiscountPct) || 0,
+                          firstSubscriptionDiscountPct: Number(firstSubDiscPct) || 0,
+                          activationDiscountPct: Number(activationDiscPct) || 0,
+                        },
+                      });
+                      toast.success("Discount settings saved");
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Failed");
+                    }
+                  }}
+                >
+                  Save discount settings
+                </Button>
+                <Button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const r = await runLuckySchoolDraw({ data: {} });
+                      toast.success(
+                        `Selected ${r.selected} of ${r.total} schools (${r.sharePct}%) at ${r.discountPct}% off activation`,
+                      );
+                      await invalidate();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Draw failed");
+                    }
+                  }}
+                >
+                  Run lucky school draw
+                </Button>
+              </div>
+            </section>
+
+            <section className="mt-8 rounded-xl border border-border bg-card p-5">
+              <h2 className="font-display text-xl">Promotions</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                <strong>Signup promotion</strong> — shareable account-request link with OG image.
+                <strong> Discount promotion</strong> — public page advertising a % off (activation or
+                first subscription messaging).
+              </p>
+              <div className="mt-4 flex gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={promoKind === "SIGNUP"}
+                    onChange={() => setPromoKind("SIGNUP")}
+                  />
+                  Account creation (signup) link
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={promoKind === "DISCOUNT"}
+                    onChange={() => setPromoKind("DISCOUNT")}
+                  />
+                  Discount promotion
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Title</Label>
+                  <Input value={promoTitle} onChange={(e) => setPromoTitle(e.target.value)} />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Description</Label>
+                  <textarea
+                    className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={promoDesc}
+                    onChange={(e) => setPromoDesc(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>OG image URL</Label>
+                  <Input
+                    value={promoOg}
+                    onChange={(e) => setPromoOg(e.target.value)}
+                    placeholder="https://… (upload to Cloudinary, paste URL)"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Upload the image in School settings / Cloudinary, then paste the public URL here.
+                  </p>
+                </div>
+                {promoKind === "DISCOUNT" && (
+                  <div className="space-y-1">
+                    <Label>Discount %</Label>
+                    <Input value={promoDisc} onChange={(e) => setPromoDisc(e.target.value)} />
+                  </div>
+                )}
+              </div>
+              <Button
+                type="button"
+                className="mt-4"
+                disabled={!promoTitle.trim()}
+                onClick={async () => {
+                  try {
+                    const r = await createPlatformPromotion({
+                      data: {
+                        kind: promoKind,
+                        title: promoTitle.trim(),
+                        description: promoDesc.trim() || undefined,
+                        ogImageUrl: promoOg.trim() || undefined,
+                        discountPct:
+                          promoKind === "DISCOUNT" ? Number(promoDisc) || 0 : undefined,
+                      },
+                    });
+                    setPromoShareUrl(r.shareUrl);
+                    try {
+                      await navigator.clipboard.writeText(r.shareUrl);
+                      toast.success("Promotion created — link copied");
+                    } catch {
+                      toast.success("Promotion created");
+                    }
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Failed");
+                  }
+                }}
+              >
+                Create promotion link
+              </Button>
+              {promoShareUrl && (
+                <p className="mt-3 break-all text-sm text-primary">{promoShareUrl}</p>
+              )}
+            </section>
+
         </TabsContent>
       </Tabs>
 

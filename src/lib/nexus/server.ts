@@ -1060,7 +1060,8 @@ export const getInviteByToken = createServerFn({ method: "POST" })
       password_set_at: string | null;
       status: string;
     }>`
-      select id, name, owner_name, owner_email, invite_token, invite_expires_at, password_set_at, status
+      select id, name, owner_name, owner_email, invite_token, invite_expires_at, password_set_at, status,
+             activation_fee, activation_discount_pct, is_lucky_school
       from schools
       where invite_token = ${token}
       limit 1
@@ -1081,6 +1082,11 @@ export const getInviteByToken = createServerFn({ method: "POST" })
       ownerName: school.owner_name,
       ownerEmail: school.owner_email,
       status: school.status,
+      activationFee: Number((school as { activation_fee?: number }).activation_fee || 0),
+      activationDiscountPct: Number(
+        (school as { activation_discount_pct?: number }).activation_discount_pct || 0,
+      ),
+      isLuckySchool: Boolean((school as { is_lucky_school?: boolean }).is_lucky_school),
     };
   });
 
@@ -5000,6 +5006,10 @@ export async function fulfillPaychanguPayment(txRef: string) {
     await applySchoolSubscriptionPayment(txRef);
   }
 
+  if (intent.purpose === "ACTIVATION_FEE") {
+    await applyActivationPayment(txRef);
+  }
+
   return { ok: true };
 }
 
@@ -8552,7 +8562,15 @@ export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST"
 
     if (data.mode === "activate") {
       amount = pf(tier, data.period);
-      detail = `First subscription (${data.period})`;
+      const fdisc = Number(
+        (school as { first_sub_discount_pct?: number }).first_sub_discount_pct || 0,
+      );
+      if (fdisc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - fdisc / 100)));
+        detail = `First subscription (${data.period}) after ${fdisc}% discount`;
+      } else {
+        detail = `First subscription (${data.period})`;
+      }
     } else if (data.mode === "extend") {
       amount = extendPrice(tier, data.period);
       detail = `Extend +${data.period} (${monthsToAdd} months)`;
@@ -9307,4 +9325,420 @@ export const exportLedgerCsv = createServerFn({ method: "POST" })
       )
       .join("\n");
     return { csv: header + body, count: rows.length };
+  });
+
+
+function activationAmountDue(fee: number, discountPct: number): number {
+  const d = Math.min(100, Math.max(0, Number(discountPct) || 0));
+  return Math.max(0, Math.round(fee * (1 - d / 100)));
+}
+
+export const getSchoolActivationInvoice = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    const rows = await sql<{
+      id: string;
+      name: string;
+      status: string;
+      activation_fee: string | number | null;
+      activation_discount_pct: string | number | null;
+      activation_paid_at: string | null;
+      is_lucky_school: boolean | null;
+      owner_email: string | null;
+      owner_name: string | null;
+    }>`
+      select id, name, status, activation_fee, activation_discount_pct, activation_paid_at,
+             is_lucky_school, owner_email, owner_name
+      from schools where id = ${data.schoolId} limit 1
+    `;
+    const s = rows[0];
+    if (!s) throw new Error("School not found");
+    const fee = Number(s.activation_fee || 0);
+    const disc = Number(s.activation_discount_pct || 0);
+    const due = activationAmountDue(fee, disc);
+    return {
+      schoolId: s.id,
+      schoolName: s.name,
+      status: s.status,
+      listFee: fee,
+      discountPct: disc,
+      amountDue: due,
+      paid: Boolean(s.activation_paid_at) || s.status === "ACTIVE",
+      isLuckySchool: Boolean(s.is_lucky_school),
+      ownerEmail: s.owner_email,
+      ownerName: s.owner_name,
+    };
+  });
+
+export const initiateActivationPayment = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { schoolId: string }) => data)
+  .handler(async ({ context, data }) => {
+    await requireSchoolAccess(context.userId, data.schoolId);
+    const sql = await getSql();
+    try {
+      await sql.query(
+        `alter table schools add column if not exists activation_paid_at timestamptz`,
+      );
+    } catch {
+      /* ignore */
+    }
+    const rows = await sql<{
+      id: string;
+      name: string;
+      status: string;
+      activation_fee: string | number | null;
+      activation_discount_pct: string | number | null;
+      activation_paid_at: string | null;
+      owner_email: string | null;
+      owner_name: string | null;
+    }>`
+      select * from schools where id = ${data.schoolId} limit 1
+    `;
+    const s = rows[0];
+    if (!s) throw new Error("School not found");
+    if (s.activation_paid_at || s.status === "ACTIVE") {
+      return { ok: true, alreadyPaid: true };
+    }
+    const fee = Number(s.activation_fee || 0);
+    const disc = Number(s.activation_discount_pct || 0);
+    const amount = activationAmountDue(fee, disc);
+    if (amount <= 0) {
+      // 100% discount — activate free
+      await sql.query(
+        `update schools set
+           status = 'ACTIVE',
+           status_reason = null,
+           activation_paid_at = now(),
+           activated_at = coalesce(activated_at, now())
+         where id = $1`,
+        [data.schoolId],
+      );
+      return { ok: true, freeActivation: true };
+    }
+
+    const { initiateCheckout } = await import("./paychangu");
+    const txRef = `act-${data.schoolId.slice(0, 8)}-${Date.now()}`;
+    const base =
+      process.env.BETTER_AUTH_URL ||
+      process.env.VITE_APP_URL ||
+      "http://localhost:8080";
+    const checkout = await initiateCheckout({
+      amount,
+      currency: "MWK",
+      email: s.owner_email || "billing@nexus.local",
+      firstName: s.owner_name || s.name,
+      txRef,
+      title: `NEXUS activation — ${s.name}`,
+      description: disc
+        ? `Activation fee after ${disc}% discount`
+        : "School activation fee",
+      callbackUrl: `${base.replace(/\/$/, "")}/api/paychangu/webhook`,
+      returnUrl: `${base.replace(/\/$/, "")}/app/activate?tx_ref=${txRef}`,
+      meta: {
+        kind: "activation_fee",
+        schoolId: data.schoolId,
+      },
+    });
+    if (!checkout.ok) throw new Error(checkout.error || "PayChangu failed");
+
+    try {
+      await sql.query(
+        `insert into payment_intents (
+           id, school_id, user_id, tx_ref, amount, status, purpose, created_at
+         ) values ($1,$2,$3,$4,$5,'PENDING','ACTIVATION_FEE',now())`,
+        [
+          nid(context.userId, `pi-act-${Date.now()}`),
+          data.schoolId,
+          context.userId,
+          txRef,
+          amount,
+        ],
+      );
+    } catch (e) {
+      console.error("[activation intent]", e);
+    }
+
+    return { ok: true, amount, txRef, checkoutUrl: checkout.checkoutUrl };
+  });
+
+export async function applyActivationPayment(txRef: string): Promise<boolean> {
+  const sql = await getSql();
+  const intents = await sql<{
+    school_id: string;
+    purpose: string;
+    status: string;
+  }>`
+    select school_id, purpose, status from payment_intents where tx_ref = ${txRef} limit 1
+  `.catch(() => [] as { school_id: string; purpose: string; status: string }[]);
+  const intent = intents[0];
+  if (!intent || intent.purpose !== "ACTIVATION_FEE") return false;
+  if (intent.status === "SUCCESS") return true;
+
+  await sql.query(
+    `update schools set
+       status = 'ACTIVE',
+       status_reason = null,
+       activation_paid_at = now(),
+       activated_at = coalesce(activated_at, now())
+     where id = $1`,
+    [intent.school_id],
+  );
+  await sql.query(
+    `update payment_intents set status = 'SUCCESS', completed_at = now() where tx_ref = $1`,
+    [txRef],
+  ).catch(() => {});
+  await audit(
+    "system",
+    intent.school_id,
+    "PayChangu",
+    "ACTIVATION_PAID",
+    "schools",
+    intent.school_id,
+    `tx=${txRef}`,
+  );
+  return true;
+}
+
+/** Platform: set default discounts + lucky pool share */
+export const saveDiscountSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      firstSubscriptionDiscountPct?: number;
+      activationDiscountPct?: number;
+      luckySharePct?: number;
+      luckyDiscountPct?: number;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const pairs: [string, string][] = [];
+    if (data.firstSubscriptionDiscountPct != null)
+      pairs.push([
+        "discount_first_subscription_pct",
+        String(Math.min(100, Math.max(0, data.firstSubscriptionDiscountPct))),
+      ]);
+    if (data.activationDiscountPct != null)
+      pairs.push([
+        "discount_activation_pct",
+        String(Math.min(100, Math.max(0, data.activationDiscountPct))),
+      ]);
+    if (data.luckySharePct != null)
+      pairs.push([
+        "lucky_share_pct",
+        String(Math.min(100, Math.max(0, data.luckySharePct))),
+      ]);
+    if (data.luckyDiscountPct != null)
+      pairs.push([
+        "lucky_discount_pct",
+        String(Math.min(100, Math.max(0, data.luckyDiscountPct))),
+      ]);
+    for (const [k, v] of pairs) {
+      await sql.query(
+        `insert into platform_settings (key, value, updated_at, updated_by)
+         values ($1,$2,now(),$3)
+         on conflict (key) do update set value = $2, updated_at = now(), updated_by = $3`,
+        [k, v, context.userId],
+      );
+    }
+    return { ok: true };
+  });
+
+/** Randomly mark ~luckySharePct of schools as lucky and apply luckyDiscountPct to activation */
+export const runLuckySchoolDraw = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    try {
+      await sql.query(
+        `alter table schools add column if not exists is_lucky_school boolean default false`,
+      );
+      await sql.query(
+        `alter table schools add column if not exists activation_discount_pct numeric default 0`,
+      );
+    } catch {
+      /* ignore */
+    }
+    const settings = await sql<{ key: string; value: string }>`
+      select key, value from platform_settings
+      where key in ('lucky_share_pct','lucky_discount_pct')
+    `;
+    const map = Object.fromEntries(settings.map((r) => [r.key, r.value]));
+    const share = Math.min(100, Math.max(1, Number(map.lucky_share_pct || 20)));
+    const disc = Math.min(100, Math.max(0, Number(map.lucky_discount_pct || 10)));
+
+    const all = await sql<{ id: string }>`
+      select id from schools
+      where status not in ('DELETED_PENDING_PURGE','CANCELLED')
+    `;
+    const n = all.length;
+    const pick = Math.max(1, Math.round((n * share) / 100));
+    // shuffle
+    const shuffled = [...all].sort(() => Math.random() - 0.5);
+    const winners = shuffled.slice(0, Math.min(pick, n));
+
+    await sql.query(`update schools set is_lucky_school = false`);
+    for (const w of winners) {
+      await sql.query(
+        `update schools set
+           is_lucky_school = true,
+           activation_discount_pct = greatest(coalesce(activation_discount_pct, 0), $1)
+         where id = $2`,
+        [disc, w.id],
+      );
+    }
+    return { ok: true, total: n, selected: winners.length, discountPct: disc, sharePct: share };
+  });
+
+export const applySchoolDiscount = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      schoolId: string;
+      activationDiscountPct?: number;
+      firstSubDiscountPct?: number;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    try {
+      await sql.query(
+        `alter table schools add column if not exists activation_discount_pct numeric default 0`,
+      );
+      await sql.query(
+        `alter table schools add column if not exists first_sub_discount_pct numeric default 0`,
+      );
+    } catch {
+      /* ignore */
+    }
+    if (data.activationDiscountPct != null) {
+      await sql.query(
+        `update schools set activation_discount_pct = $1 where id = $2`,
+        [Math.min(100, Math.max(0, data.activationDiscountPct)), data.schoolId],
+      );
+    }
+    if (data.firstSubDiscountPct != null) {
+      await sql.query(
+        `update schools set first_sub_discount_pct = $1 where id = $2`,
+        [Math.min(100, Math.max(0, data.firstSubDiscountPct)), data.schoolId],
+      );
+    }
+    return { ok: true };
+  });
+
+export const createPlatformPromotion = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (data: {
+      kind: "DISCOUNT" | "SIGNUP";
+      title: string;
+      description?: string;
+      ogImageUrl?: string;
+      discountPct?: number;
+      target?: string;
+    }) => data,
+  )
+  .handler(async ({ context, data }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    try {
+      await sql.query(`
+        create table if not exists platform_promotions (
+          id text primary key,
+          kind text not null,
+          title text not null,
+          description text,
+          og_image_url text,
+          discount_pct numeric,
+          target text default 'first_subscription',
+          public_slug text unique,
+          active boolean default true,
+          created_at timestamptz default now(),
+          expires_at timestamptz
+        )`);
+    } catch {
+      /* ignore */
+    }
+    const id = nid(context.userId, `promo-${Date.now()}`);
+    const slug = `${data.kind.toLowerCase()}-${Date.now().toString(36)}`;
+    await sql.query(
+      `insert into platform_promotions (
+         id, kind, title, description, og_image_url, discount_pct, target, public_slug, active
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,true)`,
+      [
+        id,
+        data.kind,
+        data.title.trim(),
+        data.description?.trim() || null,
+        data.ogImageUrl?.trim() || null,
+        data.discountPct ?? null,
+        data.target || "first_subscription",
+        slug,
+      ],
+    );
+    const base =
+      process.env.BETTER_AUTH_URL ||
+      process.env.VITE_APP_URL ||
+      "http://localhost:8080";
+    const path =
+      data.kind === "SIGNUP"
+        ? `/login?promo=${slug}`
+        : `/promo/${slug}`;
+    return {
+      ok: true,
+      id,
+      slug,
+      shareUrl: `${base.replace(/\/$/, "")}${path}`,
+    };
+  });
+
+export const listPlatformPromotions = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const platform = await isPlatformOwner(context.userId);
+    if (!platform) throw new Error("Platform owner only");
+    const sql = await getSql();
+    const promos = await sql`
+      select * from platform_promotions order by created_at desc limit 50
+    `.catch(() => []);
+    return { promos };
+  });
+
+export const getPublicPromotion = createServerFn({ method: "POST" })
+  .validator((data: { slug: string }) => data)
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const rows = await sql`
+      select * from platform_promotions
+      where public_slug = ${data.slug.trim()} and active = true
+      limit 1
+    `.catch(() => []);
+    const p = rows[0] as
+      | {
+          title: string;
+          description: string | null;
+          og_image_url: string | null;
+          kind: string;
+          discount_pct: number | null;
+        }
+      | undefined;
+    if (!p) throw new Error("Promotion not found");
+    return {
+      title: p.title,
+      description: p.description,
+      ogImageUrl: p.og_image_url,
+      kind: p.kind,
+      discountPct: p.discount_pct != null ? Number(p.discount_pct) : null,
+    };
   });

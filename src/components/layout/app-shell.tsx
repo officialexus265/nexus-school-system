@@ -209,6 +209,18 @@ export function AppShell() {
     return <Navigate to="/app/platform" />;
   }
 
+  const schoolStatus = (snap.data?.school as { status?: string } | undefined)?.status;
+  if (
+    !snap.isPending &&
+    !isPlatform &&
+    schoolStatus === "PENDING_PAYMENT" &&
+    pathname !== "/app/activate" &&
+    !pathname.startsWith("/app/activate")
+  ) {
+    return <Navigate to="/app/activate" />;
+  }
+
+
   return (
     <div className="flex min-h-dvh bg-background">
       <aside className="hidden w-56 shrink-0 border-r border-border bg-muted/30 lg:block">
