@@ -237,7 +237,7 @@ async function loadSnapshot(userId: string, schoolSlug: string): Promise<Snapsho
       const st = school.status;
       const reason = (school as { status_reason?: string | null }).status_reason;
       if (st === "PENDING_PAYMENT")
-        return reason || "First subscription fee not paid — pay under Billing to activate.";
+        return reason || "Pay your first subscription under Billing to activate this school.";
       if (st === "PAUSED" || st === "SUSPENDED")
         return reason || "Account paused by the system owner.";
       if (st === "CANCELLED") return reason || "Account cancelled.";
@@ -920,6 +920,7 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
     const billingTier = normalizeBillingTier(data.billingTier || "all");
     const billingPeriod = data.billingPeriod || "monthly";
     const feeFromPlan = priceFor(billingTier, billingPeriod);
+    // Activation fee removed — schools activate on first subscription payment only
     const activationFee =
       data.activationFee != null && !Number.isNaN(Number(data.activationFee))
         ? Number(data.activationFee)
@@ -1008,22 +1009,29 @@ export const createSchoolInvite = createServerFn({ method: "POST" })
       (typeof process !== "undefined" && process.env.VITE_APP_URL) ||
       "http://localhost:8080";
     
-    // Apply platform default discounts (activation + first subscription)
+    // Apply platform default first-subscription discount only (no activation fee)
     try {
       const drows = await sql<{ key: string; value: string }>`
         select key, value from platform_settings
-        where key in ('discount_activation_pct','discount_first_subscription_pct')
+        where key in ('discount_first_subscription_pct','lucky_discount_pct')
       `;
       const dmap = Object.fromEntries(drows.map((r) => [r.key, r.value]));
-      const act = Number(dmap.discount_activation_pct || 0);
       const first = Number(dmap.discount_first_subscription_pct || 0);
-      if (act > 0 || first > 0) {
+      if (first > 0) {
         await sql.query(
           `update schools set
-             activation_discount_pct = coalesce($1, 0),
-             first_sub_discount_pct = coalesce($2, 0)
-           where id = $3`,
-          [act, first, schoolId],
+             activation_fee = 0,
+             activation_discount_pct = 0,
+             first_sub_discount_pct = coalesce($1, 0),
+             next_billing_discount_pct = coalesce($1, 0),
+             next_billing_discount_set_at = case when $1 > 0 then now() else null end
+           where id = $2`,
+          [first, schoolId],
+        );
+      } else {
+        await sql.query(
+          `update schools set activation_fee = 0, activation_discount_pct = 0 where id = $1`,
+          [schoolId],
         );
       }
     } catch {
@@ -5995,7 +6003,7 @@ export async function assertSchoolNotLocked(userId: string, schoolId: string) {
   if (st === "PENDING_PAYMENT") {
     throw new Error(
       reason ||
-        "Subscription not paid yet. Pay the first subscription fee under Billing to activate this school.",
+        "Pay your first subscription under Billing to activate this school. There is no separate activation fee.",
     );
   }
   if (st === "PAUSED" || st === "SUSPENDED") {
@@ -8632,14 +8640,18 @@ export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST"
     const nextDisc = Number(
       (school as { next_billing_discount_pct?: number }).next_billing_discount_pct || 0,
     );
+    const firstSubDisc = Number(
+      (school as { first_sub_discount_pct?: number }).first_sub_discount_pct || 0,
+    );
     let consumeDiscount = false;
 
     if (data.mode === "activate") {
       amount = pf(tier, data.period);
-      // Next-period / first-pay discount (not a free current period)
-      if (nextDisc > 0) {
-        amount = Math.max(0, Math.round(amount * (1 - nextDisc / 100)));
-        detail = `First subscription (${data.period}) — ${nextDisc}% next-period discount`;
+      // Prefer next-period discount; else first-subscription default on school
+      const disc = nextDisc > 0 ? nextDisc : firstSubDisc;
+      if (disc > 0) {
+        amount = Math.max(0, Math.round(amount * (1 - disc / 100)));
+        detail = `First subscription (${data.period}) — ${disc}% discount`;
         consumeDiscount = true;
       } else {
         detail = `First subscription (${data.period})`;
@@ -8754,7 +8766,11 @@ export const initiateSchoolSubscriptionPayment = createServerFn({ method: "POST"
     if (consumeDiscount) {
       try {
         await sql.query(
-          `update schools set next_billing_discount_pct = 0, next_billing_discount_set_at = null where id = $1`,
+          `update schools set
+             next_billing_discount_pct = 0,
+             next_billing_discount_set_at = null,
+             first_sub_discount_pct = 0
+           where id = $1`,
           [data.schoolId],
         );
       } catch {
@@ -9612,6 +9628,17 @@ export const saveDiscountSettings = createServerFn({ method: "POST" })
     const platform = await isPlatformOwner(context.userId);
     if (!platform) throw new Error("Platform owner only");
     const sql = await getSql();
+    try {
+      await sql.query(`
+        create table if not exists platform_settings (
+          key text primary key,
+          value text not null default '',
+          updated_at timestamptz not null default now(),
+          updated_by text
+        )`);
+    } catch {
+      /* ignore */
+    }
     const pairs: [string, string][] = [];
     if (data.firstSubscriptionDiscountPct != null)
       pairs.push([
@@ -9684,7 +9711,9 @@ export const runLuckySchoolDraw = createServerFn({ method: "POST" })
       await sql.query(
         `update schools set
            is_lucky_school = true,
-           activation_discount_pct = greatest(coalesce(activation_discount_pct, 0), $1)
+           first_sub_discount_pct = greatest(coalesce(first_sub_discount_pct, 0), $1),
+           next_billing_discount_pct = greatest(coalesce(next_billing_discount_pct, 0), $1),
+           next_billing_discount_set_at = now()
          where id = $2`,
         [disc, w.id],
       );

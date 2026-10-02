@@ -173,17 +173,17 @@ function PlatformPage() {
         if (s.platform_alert_email) setPlatformAlertEmail(s.platform_alert_email);
         if (s.google_oauth_test_users_url)
           setGoogleOauthTestUsersUrl(s.google_oauth_test_users_url);
-        // Discount / lucky defaults (persisted via saveDiscountSettings)
-        if (s.lucky_share_pct != null && s.lucky_share_pct !== "")
-          setLuckySharePct(s.lucky_share_pct);
-        if (s.lucky_discount_pct != null && s.lucky_discount_pct !== "")
-          setLuckyDiscountPct(s.lucky_discount_pct);
-        if (s.discount_first_subscription_pct != null && s.discount_first_subscription_pct !== "")
-          setFirstSubDiscPct(s.discount_first_subscription_pct);
-        if (s.discount_activation_pct != null && s.discount_activation_pct !== "")
-          setActivationDiscPct(s.discount_activation_pct);
+        // Always rehydrate discount fields from DB (including "0")
+        if (s.lucky_share_pct != null) setLuckySharePct(String(s.lucky_share_pct));
+        if (s.lucky_discount_pct != null) setLuckyDiscountPct(String(s.lucky_discount_pct));
+        if (s.discount_first_subscription_pct != null)
+          setFirstSubDiscPct(String(s.discount_first_subscription_pct));
+        if (s.discount_activation_pct != null)
+          setActivationDiscPct(String(s.discount_activation_pct));
       })
-      .catch(() => {});
+      .catch((e) => {
+        console.error("[platform settings load]", e);
+      });
   }, [isPlatform]);
 
   const schools = q.data?.schools || [];
@@ -206,7 +206,7 @@ function PlatformPage() {
           ownerEmail,
           city: city || undefined,
           area: area || undefined,
-          activationFee: Number(activationFee) || priceFor(billingTier, billingPeriod),
+          activationFee: 0,
           plan: "Standard",
           billingTier,
           billingPeriod,
@@ -475,7 +475,11 @@ function PlatformPage() {
                                     ) : null}
                                   </td>
                                   <td className="px-3 py-2.5 align-top tabular-nums">
-                                    {money(s.activation_fee)}
+                                    {money(
+                                      (s as { quoted_amount?: number }).quoted_amount ??
+                                        s.activation_fee ??
+                                        0,
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5 align-top">
                                     <div className="flex flex-wrap gap-1.5">
@@ -1045,14 +1049,14 @@ function PlatformPage() {
           </section>
         
             <section className="mt-8 rounded-xl border border-border bg-card p-5">
-              <h2 className="font-display text-xl">Discounts & lucky schools</h2>
+              <h2 className="font-display text-xl">Subscription discounts & lucky schools</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 <strong>Activation discount</strong> — off the one-time fee when a school first
                 activates (before they can use the system).{" "}
                 <strong>First-subscription discount</strong> — off their first recurring plan
                 payment (monthly / term / year), not the activation fee.{" "}
                 <strong>Lucky draw</strong> randomly marks a share of schools with the lucky
-                activation discount.
+                subscription discount.
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
@@ -1060,16 +1064,12 @@ function PlatformPage() {
                   <Input value={luckySharePct} onChange={(e) => setLuckySharePct(e.target.value)} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Lucky discount (%)</Label>
+                  <Label>Lucky first-subscription discount (%)</Label>
                   <Input value={luckyDiscountPct} onChange={(e) => setLuckyDiscountPct(e.target.value)} />
                 </div>
                 <div className="space-y-1">
                   <Label>Default first-subscription discount (%) — recurring plan only</Label>
                   <Input value={firstSubDiscPct} onChange={(e) => setFirstSubDiscPct(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label>Default activation discount (%) — one-time open fee only</Label>
-                  <Input value={activationDiscPct} onChange={(e) => setActivationDiscPct(e.target.value)} />
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -1080,12 +1080,22 @@ function PlatformPage() {
                     try {
                       await saveDiscountSettings({
                         data: {
-                          luckySharePct: Number(luckySharePct) || 20,
+                          luckySharePct: Number(luckySharePct) || 0,
                           luckyDiscountPct: Number(luckyDiscountPct) || 0,
                           firstSubscriptionDiscountPct: Number(firstSubDiscPct) || 0,
-                          activationDiscountPct: Number(activationDiscPct) || 0,
+                          activationDiscountPct: 0,
                         },
                       });
+                      // Re-load from DB so form matches what was stored
+                      const re = await getPlatformSettings();
+                      const s = re.settings || {};
+                      if (s.lucky_share_pct != null) setLuckySharePct(String(s.lucky_share_pct));
+                      if (s.lucky_discount_pct != null)
+                        setLuckyDiscountPct(String(s.lucky_discount_pct));
+                      if (s.discount_first_subscription_pct != null)
+                        setFirstSubDiscPct(String(s.discount_first_subscription_pct));
+                      if (s.discount_activation_pct != null)
+                        setActivationDiscPct(String(s.discount_activation_pct));
                       toast.success("Discount settings saved");
                     } catch (e) {
                       toast.error(e instanceof Error ? e.message : "Failed");

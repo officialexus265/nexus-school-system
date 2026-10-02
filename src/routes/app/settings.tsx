@@ -691,6 +691,15 @@ function SettingsPage() {
         </section>
 
         <section className="rounded-xl bg-card p-5 shadow-[var(--shadow-border)] lg:col-span-2">
+          {s.status === "PENDING_PAYMENT" && (
+            <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+              <p className="font-medium">Pay subscription to activate</p>
+              <p className="mt-1 text-muted-foreground">
+                There is no separate activation fee. Choose a period below and pay with PayChangu.
+                Your school unlocks and the paid period starts when payment succeeds.
+              </p>
+            </div>
+          )}
           <h2 className="font-display text-xl">Subscription billing preference</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             How this school prefers to pay NEXUS (platform invoices). Tier is inferred from school type

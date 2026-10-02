@@ -210,14 +210,15 @@ export function AppShell() {
   }
 
   const schoolStatus = (snap.data?.school as { status?: string } | undefined)?.status;
+  // No separate activation fee — first subscription payment activates the school
   if (
     !snap.isPending &&
     !isPlatform &&
     schoolStatus === "PENDING_PAYMENT" &&
-    pathname !== "/app/activate" &&
-    !pathname.startsWith("/app/activate")
+    pathname !== "/app/settings" &&
+    !pathname.startsWith("/app/settings")
   ) {
-    return <Navigate to="/app/activate" />;
+    return <Navigate to="/app/settings" search={{ billing: "1" } as never} />;
   }
 
 
